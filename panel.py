@@ -1227,7 +1227,7 @@ def _schedule_times():
 
 def _process_globalplay_force_post_once():
     """Disparo único solicitado pelo Global Play em 21/09/2026 às 19:55 BRT."""
-    trigger_id = "globalplay_20260921_1955"
+    trigger_id = "globalplay_20260921_2015"
     marker_key = "force_post_" + trigger_id
     now = datetime.now(ZoneInfo("America/Sao_Paulo"))
     deadline = datetime(2026, 9, 21, 20, 30, tzinfo=ZoneInfo("America/Sao_Paulo"))
