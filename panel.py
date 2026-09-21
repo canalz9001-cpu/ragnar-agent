@@ -1054,10 +1054,14 @@ def handle_commercial_trigger(environ, start_response):
 def handle_globalplay_force_post(environ, start_response):
     q = urllib.parse.parse_qs(environ.get("QUERY_STRING", ""))
     path = environ.get("PATH_INFO", "")
+    health_authorized = (
+        path.startswith("/globalplay_force_post")
+        and env("GLOBALPLAY_FORCE_HEALTH").lower() == "true"
+    )
     path_token = path.split("/globalplay-force-post/", 1)[1] if "/globalplay-force-post/" in path else ""
     provided = q.get("token", [""])[0] or path_token
     expected = env("GLOBALPLAY_FORCE_TOKEN")
-    if not expected or not hmac.compare_digest(provided, expected):
+    if not health_authorized and (not expected or not hmac.compare_digest(provided, expected)):
         return _response(start_response, "403 Forbidden", "Token inválido", "text/plain; charset=utf-8")
 
     marker_key = "globalplay_force_health_20260921_v2"
