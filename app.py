@@ -12,6 +12,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+import panel
 
 LOG = logging.getLogger('ragnar')
 BRAND = json.loads(Path(__file__).with_name('brand.json').read_text())
@@ -41,11 +42,16 @@ def db():
     return c
 
 def greeting():
-    return ("Olá! 👋 Sou o Ragnar, assistente da Ragnar One. "
-            "Vi que você comentou QUERO. Escolha uma opção abaixo:")
+    return panel.get_setting(
+        'greeting_text',
+        "Olá! 👋 Sou o Ragnar, assistente da Ragnar One. Vi que você comentou QUERO. Escolha uma opção abaixo:"
+    )
 
 def interactive_message():
-    phone = env('WHATSAPP_NUMBER') or BRAND['whatsapp_number']
+    phone = panel.get_setting('whatsapp_number', env('WHATSAPP_NUMBER') or BRAND['whatsapp_number'])
+    website = panel.get_setting('website', BRAND['website'])
+    site_title = panel.get_setting('site_button_title', 'Acessar site')[:20]
+    whatsapp_title = panel.get_setting('whatsapp_button_title', 'Falar no WhatsApp')[:20]
     whatsapp = 'https://wa.me/' + phone + '?text=' + urllib.parse.quote(
         'Olá! Vim pelo Instagram da Ragnar One.'
     )
@@ -56,8 +62,8 @@ def interactive_message():
                 'template_type': 'button',
                 'text': greeting(),
                 'buttons': [
-                    {'type': 'web_url', 'url': BRAND['website'], 'title': 'Acessar site'},
-                    {'type': 'web_url', 'url': whatsapp, 'title': 'Falar no WhatsApp'}
+                    {'type': 'web_url', 'url': website, 'title': site_title},
+                    {'type': 'web_url', 'url': whatsapp, 'title': whatsapp_title}
                 ]
             }
         }
@@ -158,6 +164,8 @@ def application(environ, start_response):
         start_response(code, [('Content-Type', content_type + '; charset=utf-8'), ('Content-Length', str(len(body))), ('Cache-Control', 'no-store')])
         return [body]
     path, method = environ.get('PATH_INFO', ''), environ.get('REQUEST_METHOD', 'GET')
+    if path.startswith('/panel'):
+        return panel.handle(environ, start_response)
     if path == '/healthz' and method == 'GET':
         return reply('200 OK', {'status': 'ok', 'agent': 'Ragnar'})
     if path == '/' and method == 'GET':
