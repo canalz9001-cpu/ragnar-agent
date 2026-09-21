@@ -41,14 +41,27 @@ def db():
     return c
 
 def greeting():
+    return ("Olá! 👋 Sou o Ragnar, assistente da Ragnar One. "
+            "Vi que você comentou QUERO. Escolha uma opção abaixo:")
+
+def interactive_message():
     phone = env('WHATSAPP_NUMBER') or BRAND['whatsapp_number']
-    return (f"Olá! 👋 Sou o Ragnar, assistente da Ragnar One. Vi que você comentou QUERO.\n\n"
-            "Quer conhecer nosso streaming ou solicitar um teste grátis?\n\n"
-            "Acesse nosso site:\n"
-            f"{BRAND['website']}\n\n"
-            "Fale com nossa equipe no WhatsApp:\n"
-            f"https://wa.me/{phone}\n\n"
-            "Se quiser, responda TESTE e eu te ajudo por aqui.")
+    whatsapp = 'https://wa.me/' + phone + '?text=' + urllib.parse.quote(
+        'Olá! Vim pelo Instagram da Ragnar One.'
+    )
+    return {
+        'attachment': {
+            'type': 'template',
+            'payload': {
+                'template_type': 'button',
+                'text': greeting(),
+                'buttons': [
+                    {'type': 'web_url', 'url': BRAND['website'], 'title': 'Acessar site'},
+                    {'type': 'web_url', 'url': whatsapp, 'title': 'Falar no WhatsApp'}
+                ]
+            }
+        }
+    }
 
 def valid_signature(body, signature):
     secret = env('META_APP_SECRET')
@@ -74,17 +87,8 @@ def collect(payload):
             if isinstance(text, str) and re.search(r'\bquero\b', text, re.I):
                 cid = str(value['id'])
                 jobs.append(('comment:' + cid, cid, 'comment', time.time()))
-        # Somente responder DMs recebidos; sem follow-ups proativos.
-        for event in entry.get('messaging', []):
-            msg = event.get('message', {})
-            sender = str(event.get('sender', {}).get('id', ''))
-            recipient = str(event.get('recipient', {}).get('id', ''))
-            if msg.get('is_echo') or msg.get('is_deleted') or not msg.get('mid') or not msg.get('text'):
-                continue
-            if sender and sender != env('INSTAGRAM_ACCOUNT_ID') and recipient == env('INSTAGRAM_ACCOUNT_ID'):
-                received = float(event.get('timestamp', 0)) / 1000
-                if 0 <= time.time() - received < 23 * 3600:
-                    jobs.append(('dm:' + str(msg['mid']), sender, 'dm', received))
+        # Mensagens recebidas no Direct não disparam a saudação automática.
+        # Isso evita repetir a oferta quando a pessoa responde "TESTE", "oi" etc.
     return jobs
 
 def enqueue(jobs):
@@ -96,7 +100,9 @@ def send(recipient, kind):
     account = env('INSTAGRAM_ACCOUNT_ID')
     if not account.isdigit():
         raise ValueError('account_id_format')
-    body = {'recipient': {('comment_id' if kind == 'comment' else 'id'): recipient}, 'message': {'text': greeting()}}
+    if kind != 'comment':
+        raise ValueError('unsupported_kind')
+    body = {'recipient': {'comment_id': recipient}, 'message': interactive_message()}
     req = urllib.request.Request(f'{host}/{env("META_API_VERSION")}/{account}/messages', data=json.dumps(body).encode(), headers={'Authorization': 'Bearer ' + env('INSTAGRAM_ACCESS_TOKEN'), 'Content-Type': 'application/json'}, method='POST')
     with urllib.request.urlopen(req, timeout=20) as response:
         result = json.load(response)
@@ -119,10 +125,6 @@ def process_one():
         # Limite conservador: não enviar respostas antigas após retomada.
         if time.time() - created > 23 * 3600:
             c.execute("UPDATE jobs SET status='expired' WHERE id=?", (jid,))
-            return
-        # Uma saudação por usuário por dia em DM evita repetir a mesma oferta.
-        if kind == 'dm' and c.execute("SELECT 1 FROM jobs WHERE recipient=? AND kind='dm' AND status IN ('sent','sending','uncertain') AND created>?", (recipient, time.time()-86400)).fetchone():
-            c.execute("UPDATE jobs SET status='suppressed' WHERE id=?", (jid,))
             return
         c.execute("UPDATE jobs SET status='sending' WHERE id=?", (jid,))
     try:
