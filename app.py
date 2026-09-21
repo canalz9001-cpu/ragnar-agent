@@ -167,6 +167,8 @@ def application(environ, start_response):
     path, method = environ.get('PATH_INFO', ''), environ.get('REQUEST_METHOD', 'GET')
     if path == '/media-public':
         return panel.handle_public_media(environ, start_response)
+    if path == '/public-file':
+        return panel.handle_public_file(environ, start_response)
     if path.startswith('/panel'):
         return panel.handle(environ, start_response)
     if path == '/healthz' and method == 'GET':
