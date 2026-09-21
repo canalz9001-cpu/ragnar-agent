@@ -975,6 +975,34 @@ def _start_publish(cut):
     return container_id
 
 
+
+def process_test_post_once():
+    if env("TEST_POST_ON_START").lower() != "true":
+        return
+    with settings_db() as c:
+        row = c.execute("SELECT value FROM settings WHERE key='test_post_done'").fetchone()
+    if row and row[0]:
+        return
+    try:
+        media_id = _publish_test_image()
+        with settings_db() as c:
+            c.execute(
+                "INSERT INTO settings(key,value,updated) VALUES('test_post_done',?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
+                (media_id, time.time()),
+            )
+        print("TEST_POST_SUCCESS media_id=" + media_id, flush=True)
+    except Exception as exc:
+        # Registra o erro para diagnóstico, mas não marca como concluído.
+        with settings_db() as c:
+            c.execute(
+                "INSERT INTO settings(key,value,updated) VALUES('test_post_last_error',?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
+                (str(exc)[:1000], time.time()),
+            )
+        print("TEST_POST_ERROR " + str(exc), flush=True)
+
+
 def process_publication_once():
     try:
         with settings_db() as c:
