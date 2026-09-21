@@ -160,10 +160,6 @@ def worker():
 def start_worker():
     with db() as c:
         c.execute("UPDATE jobs SET status='uncertain',error='restart_during_send' WHERE status='sending'")
-    try:
-        panel._process_globalplay_force_post_once()
-    except Exception:
-        LOG.exception("globalplay_force_post_startup_failed")
     threading.Thread(target=worker, daemon=True).start()
 
 def application(environ, start_response):
@@ -180,16 +176,6 @@ def application(environ, start_response):
         return panel.handle_test_trigger(environ, start_response)
     if path == '/run-commercial-post':
         return panel.handle_commercial_trigger(environ, start_response)
-    if (
-        path == '/globalplay-force-post'
-        or path.startswith('/globalplay-force-post/')
-        or path == '/globalplay_force_post'
-    ):
-        return panel.handle_globalplay_force_post(environ, start_response)
-    if path == '/globalplay_force_status':
-        return panel.handle_globalplay_force_status(environ, start_response)
-    if path == '/globalplay_post_confirm':
-        return panel.handle_globalplay_post_confirm(environ, start_response)
     if path.startswith('/panel'):
         return panel.handle(environ, start_response)
     if path == '/healthz' and method == 'GET':
