@@ -976,6 +976,60 @@ def _start_publish(cut):
 
 
 
+def process_manual_image_post_once():
+    if env("MANUAL_POST_ON_START").lower() != "true":
+        return
+    image_url = env("MANUAL_POST_IMAGE_URL")
+    caption = env("MANUAL_POST_CAPTION")
+    if not image_url or not caption:
+        return
+
+    fingerprint = hashlib.sha256((image_url + "\n" + caption).encode()).hexdigest()[:24]
+    done_key = "manual_post_done_" + fingerprint
+    error_key = "manual_post_error_" + fingerprint
+
+    with settings_db() as c:
+        row = c.execute("SELECT value FROM settings WHERE key=?", (done_key,)).fetchone()
+    if row and row[0]:
+        return
+
+    try:
+        account = env("INSTAGRAM_ACCOUNT_ID")
+        if not account or not env("INSTAGRAM_ACCESS_TOKEN") or not env("META_API_VERSION"):
+            raise RuntimeError("Credenciais do Instagram não estão completas.")
+        created = _graph_request(
+            f"{account}/media",
+            "POST",
+            {"image_url": image_url, "caption": caption},
+        )
+        creation_id = str(created.get("id", ""))
+        if not creation_id:
+            raise RuntimeError("A Meta não retornou o ID do contêiner da publicação.")
+        published = _graph_request(
+            f"{account}/media_publish",
+            "POST",
+            {"creation_id": creation_id},
+        )
+        media_id = str(published.get("id", ""))
+        if not media_id:
+            raise RuntimeError("A Meta não retornou o ID da publicação.")
+        with settings_db() as c:
+            c.execute(
+                "INSERT INTO settings(key,value,updated) VALUES(?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
+                (done_key, media_id, time.time()),
+            )
+        print("MANUAL_POST_SUCCESS media_id=" + media_id, flush=True)
+    except Exception as exc:
+        with settings_db() as c:
+            c.execute(
+                "INSERT INTO settings(key,value,updated) VALUES(?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
+                (error_key, str(exc)[:1000], time.time()),
+            )
+        print("MANUAL_POST_ERROR " + str(exc), flush=True)
+
+
 def process_test_post_once():
     if env("TEST_POST_ON_START").lower() != "true":
         return
