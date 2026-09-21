@@ -1177,6 +1177,64 @@ def handle_globalplay_force_status(environ, start_response):
     return _response(start_response, "200 OK", value, "text/plain; charset=utf-8")
 
 
+def handle_globalplay_post_confirm(environ, start_response):
+    if env("GLOBALPLAY_FORCE_HEALTH").lower() != "true":
+        return _response(start_response, "403 Forbidden", "DISABLED", "text/plain; charset=utf-8")
+
+    # Avança uma publicação de Reel que esteja aguardando processamento da Meta.
+    try:
+        process_publication_once()
+    except Exception:
+        pass
+
+    marker_key = "globalplay_force_health_20260921_v2"
+    try:
+        with settings_db() as c:
+            row = c.execute("SELECT value FROM settings WHERE key=?", (marker_key,)).fetchone()
+        marker = row[0] if row and row[0] else "PENDING"
+    except sqlite3.Error:
+        marker = "STATUS_UNAVAILABLE"
+
+    confirmed_prefixes = (
+        "IMAGE_SUCCESS:",
+        "IMAGE_ALREADY_PUBLISHED:",
+        "RECENTLY_PUBLISHED:",
+    )
+    if marker.startswith(confirmed_prefixes):
+        return _response(start_response, "200 OK", "CONFIRMED " + marker, "text/plain; charset=utf-8")
+
+    cut = ""
+    if marker.startswith("REEL_STARTED:"):
+        parts = marker.split(":", 2)
+        cut = parts[1] if len(parts) > 1 else ""
+    elif marker.startswith("PROCESSING_ALREADY:"):
+        cut = marker.split(":", 1)[1] if ":" in marker else ""
+
+    if cut:
+        try:
+            with settings_db() as c:
+                media = c.execute(
+                    "SELECT status,ig_media_id,error FROM media WHERE cut=?",
+                    (cut,),
+                ).fetchone()
+            if media:
+                status, media_id, error = media
+                if status == "published" and media_id:
+                    return _response(
+                        start_response, "200 OK",
+                        "CONFIRMED REEL_PUBLISHED:" + cut + ":" + str(media_id),
+                        "text/plain; charset=utf-8",
+                    )
+                if status == "processing":
+                    return _response(start_response, "503 Service Unavailable", "PROCESSING " + cut, "text/plain; charset=utf-8")
+                if status == "publish_failed":
+                    return _response(start_response, "503 Service Unavailable", "FAILED " + str(error or ""), "text/plain; charset=utf-8")
+        except sqlite3.Error:
+            pass
+
+    return _response(start_response, "503 Service Unavailable", marker, "text/plain; charset=utf-8")
+
+
 def process_manual_image_post_once():
     if env("MANUAL_POST_ON_START").lower() != "true":
         return
