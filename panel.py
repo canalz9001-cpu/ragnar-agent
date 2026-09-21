@@ -1166,6 +1166,17 @@ def handle_globalplay_force_post(environ, start_response):
         print("GLOBALPLAY_FORCE_IMAGE_ERROR " + str(exc), flush=True)
         return _response(start_response, "200 OK", "GLOBALPLAY_FORCE_IMAGE_ERROR " + str(exc), "text/plain; charset=utf-8")
 
+def handle_globalplay_force_status(environ, start_response):
+    marker_key = "globalplay_force_health_20260921_v2"
+    try:
+        with settings_db() as c:
+            row = c.execute("SELECT value FROM settings WHERE key=?", (marker_key,)).fetchone()
+        value = row[0] if row and row[0] else "PENDING"
+    except sqlite3.Error:
+        value = "STATUS_UNAVAILABLE"
+    return _response(start_response, "200 OK", value, "text/plain; charset=utf-8")
+
+
 def process_manual_image_post_once():
     if env("MANUAL_POST_ON_START").lower() != "true":
         return
