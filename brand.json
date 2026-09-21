@@ -1,0 +1,11 @@
+{
+  "agent": "Ragnar",
+  "business": "Ragnar One",
+  "instagram": "@ragnarplay1",
+  "website": "https://ragnarplay.online/",
+  "whatsapp_number": "553491341688",
+  "whatsapp_confirmed": false,
+  "plans_brl": {"mensal": 25, "trimestral": 60, "semestral": 110, "anual": 190},
+  "simultaneous_devices": 2,
+  "free_trial_duration": null
+}
