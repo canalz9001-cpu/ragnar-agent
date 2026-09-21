@@ -1080,9 +1080,34 @@ def handle_globalplay_force_post(environ, start_response):
             )
 
     with settings_db() as c:
+        processing = c.execute(
+            "SELECT cut FROM media WHERE status='processing' ORDER BY updated DESC LIMIT 1"
+        ).fetchone()
+        recent = c.execute(
+            "SELECT cut FROM media WHERE status='published' AND updated>? ORDER BY updated DESC LIMIT 1",
+            (time.time() - 1800,),
+        ).fetchone()
         row = c.execute(
             "SELECT cut FROM media WHERE status='queued' ORDER BY created LIMIT 1"
         ).fetchone()
+
+    if processing:
+        mark("PROCESSING_ALREADY:" + processing[0])
+        print("GLOBALPLAY_FORCE_PROCESSING_ALREADY cut=" + processing[0], flush=True)
+        return _response(
+            start_response, "200 OK",
+            "GLOBALPLAY_FORCE_PROCESSING_ALREADY cut=" + processing[0],
+            "text/plain; charset=utf-8",
+        )
+
+    if recent:
+        mark("RECENTLY_PUBLISHED:" + recent[0])
+        print("GLOBALPLAY_FORCE_RECENTLY_PUBLISHED cut=" + recent[0], flush=True)
+        return _response(
+            start_response, "200 OK",
+            "GLOBALPLAY_FORCE_RECENTLY_PUBLISHED cut=" + recent[0],
+            "text/plain; charset=utf-8",
+        )
 
     if row:
         cut = row[0]
