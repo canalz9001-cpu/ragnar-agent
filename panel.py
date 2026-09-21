@@ -832,6 +832,101 @@ def handle_public_media(environ, start_response):
     return _serve_file(environ, start_response, path, public=True)
 
 
+
+def _create_test_post_image():
+    folder = data_root() / "test-posts"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "ragnar-test-post.png"
+    img = Image.new("RGB", (1080, 1350), (7, 16, 24))
+    draw = ImageDraw.Draw(img)
+    font_bold = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    font_regular = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    title = ImageFont.truetype(font_bold, 92)
+    sub = ImageFont.truetype(font_bold, 56)
+    body = ImageFont.truetype(font_regular, 38)
+    small = ImageFont.truetype(font_bold, 34)
+
+    draw.rounded_rectangle((70, 90, 1010, 1260), radius=50, fill=(15, 28, 39), outline=(226, 45, 62), width=8)
+    draw.text((110, 160), "RAGNAR", font=title, fill=(245, 247, 250))
+    draw.text((560, 160), "ONE", font=title, fill=(226, 45, 62))
+    draw.line((110, 290, 970, 290), fill=(226, 45, 62), width=5)
+    draw.text((110, 390), "POSTAGEM DE TESTE", font=sub, fill=(245, 247, 250))
+    draw.text((110, 520), "Automação do Instagram", font=body, fill=(170, 190, 205))
+    draw.text((110, 585), "conectada ao agente Ragnar.", font=body, fill=(170, 190, 205))
+    draw.rounded_rectangle((110, 760, 970, 930), radius=28, fill=(30, 52, 66))
+    draw.text((175, 810), "TESTE DE PUBLICAÇÃO", font=small, fill=(245, 247, 250))
+    draw.text((110, 1050), "Se você está vendo este post,", font=body, fill=(245, 247, 250))
+    draw.text((110, 1110), "a conexão está funcionando.", font=body, fill=(245, 247, 250))
+    img.save(path, "PNG")
+    return path
+
+
+def _public_file_signature(kind, filename, expiry):
+    payload = f"{kind}|{filename}|{expiry}"
+    return hmac.new(_secret(), payload.encode(), hashlib.sha256).hexdigest()
+
+
+def _public_file_url(kind, filename):
+    expiry = int(time.time()) + 3600
+    sig = _public_file_signature(kind, filename, expiry)
+    domain = env("RAILWAY_PUBLIC_DOMAIN") or "ragnar-agent-production.up.railway.app"
+    return (
+        "https://" + domain + "/public-file?" +
+        urllib.parse.urlencode({"kind": kind, "file": filename, "exp": expiry, "sig": sig})
+    )
+
+
+def handle_public_file(environ, start_response):
+    q = urllib.parse.parse_qs(environ.get("QUERY_STRING", ""))
+    kind = q.get("kind", [""])[0]
+    filename = _safe_name(q.get("file", [""])[0])
+    exp = q.get("exp", [""])[0]
+    sig = q.get("sig", [""])[0]
+    try:
+        expiry = int(exp)
+    except ValueError:
+        return _response(start_response, "403 Forbidden", "Link inválido", "text/plain; charset=utf-8")
+    if expiry < int(time.time()) or not hmac.compare_digest(sig, _public_file_signature(kind, filename, expiry)):
+        return _response(start_response, "403 Forbidden", "Link expirado ou inválido", "text/plain; charset=utf-8")
+
+    if kind == "test-image":
+        path = data_root() / "test-posts" / filename
+        if not path.exists() or not path.is_file():
+            return _response(start_response, "404 Not Found", "Imagem não encontrada", "text/plain; charset=utf-8")
+        return _serve_file(environ, start_response, path, public=True)
+
+    return _response(start_response, "404 Not Found", "Arquivo não encontrado", "text/plain; charset=utf-8")
+
+
+def _publish_test_image():
+    account = env("INSTAGRAM_ACCOUNT_ID")
+    if not account or not env("INSTAGRAM_ACCESS_TOKEN") or not env("META_API_VERSION"):
+        raise RuntimeError("Credenciais do Instagram não estão completas.")
+    image = _create_test_post_image()
+    image_url = _public_file_url("test-image", image.name)
+    caption = (
+        "Teste de automação do Ragnar One ✅\\n\\n"
+        "Se você está vendo esta publicação, a conexão de postagem com o Instagram está funcionando.\\n\\n"
+        "#RagnarOne"
+    )
+    created = _graph_request(
+        f"{account}/media",
+        "POST",
+        {"image_url": image_url, "caption": caption},
+    )
+    creation_id = str(created.get("id", ""))
+    if not creation_id:
+        raise RuntimeError("A Meta não retornou o ID do contêiner da publicação.")
+    published = _graph_request(
+        f"{account}/media_publish",
+        "POST",
+        {"creation_id": creation_id},
+    )
+    media_id = str(published.get("id", ""))
+    if not media_id:
+        raise RuntimeError("A Meta não retornou o ID da publicação.")
+    return media_id
+
 def _graph_request(path, method="GET", data=None):
     host = "https://graph.instagram.com"
     version = env("META_API_VERSION")
@@ -965,6 +1060,13 @@ def handle(environ, start_response):
 
     if path in ("/panel", "/panel/"):
         return _response(start_response, "200 OK", _dashboard())
+
+    if path == "/panel/test-post" and method == "POST":
+        try:
+            media_id = _publish_test_image()
+            return _response(start_response, "200 OK", _dashboard("Postagem de teste publicada no Instagram. Media ID: " + media_id))
+        except Exception as exc:
+            return _response(start_response, "400 Bad Request", _dashboard("Falha ao publicar teste: " + str(exc)))
 
     if path == "/panel/media" and method == "GET":
         q = urllib.parse.parse_qs(environ.get("QUERY_STRING", ""))
