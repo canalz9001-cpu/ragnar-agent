@@ -37,7 +37,7 @@ DEFAULTS = {
         "travamentos em jogos, delay, filmes e séries travando e suporte que não responde."
     ),
     "posts_per_day": "3",
-    "post_times": "09:00, 15:00, 21:00",
+    "post_times": "09:00, 12:00, 18:00",
     "reel_caption": (
         "Chega de perder os melhores momentos por causa de travamentos.\\n\\n"
         'Digite "QUERO" abaixo para saber mais\\n\\n'
@@ -1190,6 +1190,31 @@ def process_test_post_once():
 
 
 def _schedule_times():
+    # Migração da agenda definida pelo Global Play em 21/09/2026.
+    # Atualiza uma única vez também instalações que já tenham horários antigos
+    # persistidos no volume do Railway.
+    policy_version = "2026-09-21_09-12-18"
+    desired_times = DEFAULTS["post_times"]
+    try:
+        with settings_db() as c:
+            marker = c.execute(
+                "SELECT value FROM settings WHERE key='schedule_policy_version'"
+            ).fetchone()
+            if not marker or marker[0] != policy_version:
+                now = time.time()
+                c.execute(
+                    "INSERT INTO settings(key,value,updated) VALUES('post_times',?,?,?)"
+                    .replace("(key,value,updated)", "(key,value,updated)")
+                    .replace("VALUES('post_times',?,?,?)", "VALUES('post_times',?,?)"),
+                    (desired_times, now),
+                )
+                c.execute(
+                    "INSERT INTO settings(key,value,updated) VALUES('schedule_policy_version',?,?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
+                    (policy_version, now),
+                )
+    except sqlite3.Error:
+        pass
     raw = get_setting("post_times", DEFAULTS["post_times"]) or ""
     times = []
     for part in raw.split(","):
