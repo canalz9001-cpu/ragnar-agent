@@ -151,6 +151,7 @@ def worker():
         try:
             process_one()
             panel.process_manual_image_post_once()
+            panel.process_scheduled_posts_once()
             panel.process_test_post_once()
             panel.process_publication_once()
         except Exception:
@@ -173,6 +174,8 @@ def application(environ, start_response):
         return panel.handle_public_file(environ, start_response)
     if path == '/run-test-post':
         return panel.handle_test_trigger(environ, start_response)
+    if path == '/run-commercial-post':
+        return panel.handle_commercial_trigger(environ, start_response)
     if path.startswith('/panel'):
         return panel.handle(environ, start_response)
     if path == '/healthz' and method == 'GET':
