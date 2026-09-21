@@ -506,7 +506,7 @@ def _upload(environ):
         raise ValueError(f"Arquivo maior que {max_mb} MB")
     form = cgi.FieldStorage(fp=environ["wsgi.input"], environ=environ, keep_blank_values=True)
     item = form["video"] if "video" in form else None
-    if not item or not getattr(item, "filename", ""):
+    if item is None or not getattr(item, "filename", ""):
         raise ValueError("Selecione um vídeo")
     name = _safe_name(item.filename)
     suffix = Path(name).suffix.lower()
