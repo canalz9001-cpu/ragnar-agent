@@ -1067,7 +1067,12 @@ def handle_globalplay_force_post(environ, start_response):
     marker_key = "globalplay_force_health_20260921_v2"
     with settings_db() as c:
         marker = c.execute("SELECT value FROM settings WHERE key=?", (marker_key,)).fetchone()
+    result_file = data_root() / "globalplay_force_result.txt"
     if marker and marker[0]:
+        try:
+            result_file.write_text(marker[0], encoding="utf-8")
+        except OSError:
+            pass
         print("GLOBALPLAY_FORCE_ALREADY_TRIGGERED " + marker[0], flush=True)
         return _response(start_response, "200 OK", "GLOBALPLAY_FORCE_ALREADY_TRIGGERED " + marker[0], "text/plain; charset=utf-8")
 
@@ -1078,6 +1083,10 @@ def handle_globalplay_force_post(environ, start_response):
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
                 (marker_key, value, time.time()),
             )
+        try:
+            result_file.write_text(value, encoding="utf-8")
+        except OSError:
+            pass
 
     with settings_db() as c:
         processing = c.execute(
