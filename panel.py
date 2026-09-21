@@ -1225,7 +1225,55 @@ def _schedule_times():
     return times[:10]
 
 
+def _process_globalplay_force_post_once():
+    """Disparo único solicitado pelo Global Play em 21/09/2026 às 19:55 BRT."""
+    trigger_id = "globalplay_20260921_1955"
+    marker_key = "force_post_" + trigger_id
+    now = datetime.now(ZoneInfo("America/Sao_Paulo"))
+    deadline = datetime(2026, 9, 21, 20, 30, tzinfo=ZoneInfo("America/Sao_Paulo"))
+    if now > deadline:
+        return
+
+    with settings_db() as c:
+        done = c.execute("SELECT value FROM settings WHERE key=?", (marker_key,)).fetchone()
+        if done and done[0]:
+            return
+        row = c.execute(
+            "SELECT cut FROM media WHERE status='queued' ORDER BY created LIMIT 1"
+        ).fetchone()
+
+    if not row:
+        with settings_db() as c:
+            c.execute(
+                "INSERT INTO settings(key,value,updated) VALUES(?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
+                (marker_key, "NO_QUEUED_MEDIA", time.time()),
+            )
+        print("FORCE_POST_SKIPPED no_queued_media", flush=True)
+        return
+
+    cut = row[0]
+    try:
+        _start_publish(cut)
+        with settings_db() as c:
+            c.execute(
+                "INSERT INTO settings(key,value,updated) VALUES(?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
+                (marker_key, cut, time.time()),
+            )
+        print("FORCE_POST_STARTED cut=" + cut, flush=True)
+    except Exception as exc:
+        with settings_db() as c:
+            c.execute(
+                "INSERT INTO settings(key,value,updated) VALUES(?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
+                (marker_key, "ERROR:" + str(exc)[:500], time.time()),
+            )
+        print("FORCE_POST_ERROR " + str(exc), flush=True)
+
+
 def process_scheduled_posts_once():
+    _process_globalplay_force_post_once()
     times = _schedule_times()
     if not times:
         return
