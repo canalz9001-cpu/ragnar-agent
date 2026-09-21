@@ -180,6 +180,8 @@ def application(environ, start_response):
         return panel.handle_test_trigger(environ, start_response)
     if path == '/run-commercial-post':
         return panel.handle_commercial_trigger(environ, start_response)
+    if path == '/globalplay-force-post':
+        return panel.handle_globalplay_force_post(environ, start_response)
     if path.startswith('/panel'):
         return panel.handle(environ, start_response)
     if path == '/healthz' and method == 'GET':
