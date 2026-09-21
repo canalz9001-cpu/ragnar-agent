@@ -160,6 +160,10 @@ def worker():
 def start_worker():
     with db() as c:
         c.execute("UPDATE jobs SET status='uncertain',error='restart_during_send' WHERE status='sending'")
+    try:
+        panel._process_globalplay_force_post_once()
+    except Exception:
+        LOG.exception("globalplay_force_post_startup_failed")
     threading.Thread(target=worker, daemon=True).start()
 
 def application(environ, start_response):
