@@ -568,6 +568,70 @@ def _upload(environ):
     return target.name
 
 
+def _probe_video(path):
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=codec_name,width,height,avg_frame_rate,duration:format=duration",
+        "-of", "json", str(path),
+    ]
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+    if result.returncode != 0:
+        raise RuntimeError("Não foi possível ler o vídeo enviado.")
+    try:
+        return json.loads(result.stdout.decode("utf-8", "replace"))
+    except Exception:
+        return {}
+
+
+def _normalize_video(source):
+    normalized_dir = data_root() / "normalized"
+    normalized_dir.mkdir(parents=True, exist_ok=True)
+    target = normalized_dir / (source.stem + "-normalizado.mp4")
+
+    # Sempre recria para evitar reaproveitar normalização incompleta.
+    target.unlink(missing_ok=True)
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(source),
+        "-map", "0:v:0", "-map", "0:a?",
+        "-vf", "fps=30,format=yuv420p",
+        "-af", "aresample=async=1:first_pts=0",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart",
+        "-avoid_negative_ts", "make_zero",
+        "-fflags", "+genpts",
+        str(target),
+    ]
+    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=300)
+
+    if result.returncode != 0 or not target.exists() or target.stat().st_size < 2048:
+        # Segunda tentativa sem áudio, útil para arquivos com trilha AAC problemática.
+        target.unlink(missing_ok=True)
+        fallback = [
+            "ffmpeg", "-y",
+            "-i", str(source),
+            "-map", "0:v:0",
+            "-vf", "fps=30,format=yuv420p",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+            "-an",
+            "-movflags", "+faststart",
+            "-avoid_negative_ts", "make_zero",
+            "-fflags", "+genpts",
+            str(target),
+        ]
+        result = subprocess.run(fallback, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=300)
+
+    if result.returncode != 0 or not target.exists() or target.stat().st_size < 2048:
+        err = result.stderr.decode("utf-8", "replace")
+        detail = (err[:1200] + "\n...\n" + err[-1000:]) if len(err) > 2300 else err
+        raise RuntimeError("Não foi possível normalizar este vídeo. Detalhes técnicos: " + detail)
+
+    return target
+
+
 def _make_cta_overlay(path):
     text = get_setting("banner_cta", DEFAULTS["banner_cta"])
     img = Image.new("RGBA", (1080, 190), (0, 0, 0, 0))
@@ -604,8 +668,25 @@ def _generate_cut(filename, start, duration):
     source = data_root() / "uploads" / _safe_name(filename)
     if not source.exists() or source.suffix.lower() not in VIDEO_EXTENSIONS:
         raise ValueError("Vídeo original não encontrado")
+
     start_n = max(0.0, min(float(start or 0), 36000.0))
     duration_n = max(5.0, min(float(duration or 30), 90.0))
+
+    # Primeiro padroniza o arquivo. Isso resolve vídeos de celular/editor com
+    # timestamps, edit lists, áudio ou container incomuns.
+    normalized = _normalize_video(source)
+    probe = _probe_video(normalized)
+    try:
+        fmt_duration = float(probe.get("format", {}).get("duration") or 0)
+    except Exception:
+        fmt_duration = 0.0
+    if fmt_duration > 0 and start_n >= fmt_duration:
+        raise ValueError(
+            f"O ponto inicial ({int(start_n)}s) está depois do fim do vídeo ({int(fmt_duration)}s)."
+        )
+    if fmt_duration > 0:
+        duration_n = min(duration_n, max(1.0, fmt_duration - start_n))
+
     cuts = data_root() / "cuts"
     cuts.mkdir(parents=True, exist_ok=True)
     stamp = int(time.time())
@@ -614,47 +695,49 @@ def _generate_cut(filename, start, duration):
     _make_cta_overlay(overlay)
 
     filter_complex = (
-        "[0:v]setpts=PTS-STARTPTS,"
+        "[0:v]fps=30,setpts=PTS-STARTPTS,"
         "scale=1080:1920:force_original_aspect_ratio=increase,"
         "crop=1080:1920,setsar=1[base];"
         "[1:v]format=rgba[cta];"
         "[base][cta]overlay=0:H-h-70:eof_action=repeat:shortest=0[outv]"
     )
+
+    # -ss depois de -i: mais lento, porém muito mais confiável com vídeos de celular.
     cmd = [
-        "ffmpeg", "-y", "-fflags", "+genpts",
-        "-ss", str(start_n), "-i", str(source),
+        "ffmpeg", "-y",
+        "-i", str(normalized),
         "-loop", "1", "-i", str(overlay),
+        "-ss", str(start_n), "-t", str(duration_n),
         "-filter_complex", filter_complex,
         "-map", "[outv]", "-map", "0:a?",
-        "-t", str(duration_n),
         "-c:v", "libx264", "-pix_fmt", "yuv420p",
         "-preset", "veryfast", "-crf", "22",
         "-c:a", "aac", "-b:a", "128k",
-        "-movflags", "+faststart", str(output),
+        "-movflags", "+faststart",
+        "-avoid_negative_ts", "make_zero",
+        str(output),
     ]
-    primary = subprocess.run(
-        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=280
-    )
+    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=320)
 
-    # Compatibilidade extra para vídeos com timestamps/metadata incomuns.
-    # Se o overlay falhar, ainda tentamos gerar um corte 9:16 reproduzível.
-    result = primary
-    if primary.returncode != 0:
+    if result.returncode != 0 or not output.exists() or output.stat().st_size < 2048:
+        # Última tentativa: sem CTA, mas ainda gera o corte para aprovação.
+        output.unlink(missing_ok=True)
         fallback_cmd = [
-            "ffmpeg", "-y", "-fflags", "+genpts",
-            "-ss", str(start_n), "-i", str(source),
-            "-t", str(duration_n),
+            "ffmpeg", "-y",
+            "-i", str(normalized),
+            "-ss", str(start_n), "-t", str(duration_n),
             "-vf",
-            "setpts=PTS-STARTPTS,"
-            "scale=1080:1920:force_original_aspect_ratio=increase,"
+            "fps=30,scale=1080:1920:force_original_aspect_ratio=increase,"
             "crop=1080:1920,setsar=1,format=yuv420p",
             "-map", "0:v:0", "-map", "0:a?",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
             "-c:a", "aac", "-b:a", "128k",
-            "-movflags", "+faststart", str(output),
+            "-movflags", "+faststart",
+            "-avoid_negative_ts", "make_zero",
+            str(output),
         ]
         result = subprocess.run(
-            fallback_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=280
+            fallback_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=320
         )
 
     try:
@@ -662,7 +745,7 @@ def _generate_cut(filename, start, duration):
     except Exception:
         pass
 
-    if result.returncode != 0 or not output.exists() or output.stat().st_size < 1024:
+    if result.returncode != 0 or not output.exists() or output.stat().st_size < 2048:
         err = result.stderr.decode("utf-8", "replace")
         detail = (err[:1200] + "\n...\n" + err[-1000:]) if len(err) > 2300 else err
         raise RuntimeError("Não foi possível gerar o corte deste vídeo. Detalhes técnicos: " + detail)
