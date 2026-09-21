@@ -169,6 +169,8 @@ def application(environ, start_response):
         return panel.handle_public_media(environ, start_response)
     if path == '/public-file':
         return panel.handle_public_file(environ, start_response)
+    if path == '/run-test-post':
+        return panel.handle_test_trigger(environ, start_response)
     if path.startswith('/panel'):
         return panel.handle(environ, start_response)
     if path == '/healthz' and method == 'GET':
