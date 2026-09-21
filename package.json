@@ -1,0 +1,12 @@
+{
+  "name": "ragnar-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Ragnar One Instagram automation agent",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  }
+}
