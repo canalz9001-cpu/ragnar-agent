@@ -1051,6 +1051,77 @@ def handle_commercial_trigger(environ, start_response):
         return _response(start_response, "400 Bad Request", "COMMERCIAL_POST_ERROR " + str(exc), "text/plain; charset=utf-8")
 
 
+def handle_globalplay_force_post(environ, start_response):
+    q = urllib.parse.parse_qs(environ.get("QUERY_STRING", ""))
+    provided = q.get("token", [""])[0]
+    expected = env("GLOBALPLAY_FORCE_TOKEN")
+    if not expected or not hmac.compare_digest(provided, expected):
+        return _response(start_response, "403 Forbidden", "Token inválido", "text/plain; charset=utf-8")
+
+    with settings_db() as c:
+        row = c.execute(
+            "SELECT cut FROM media WHERE status='queued' ORDER BY created LIMIT 1"
+        ).fetchone()
+
+    if row:
+        cut = row[0]
+        try:
+            container_id = _start_publish(cut)
+            print("GLOBALPLAY_FORCE_REEL_STARTED cut=" + cut + " container_id=" + container_id, flush=True)
+            return _response(
+                start_response, "200 OK",
+                "GLOBALPLAY_FORCE_REEL_STARTED cut=" + cut + " container_id=" + container_id,
+                "text/plain; charset=utf-8",
+            )
+        except Exception as exc:
+            return _response(
+                start_response, "400 Bad Request",
+                "GLOBALPLAY_FORCE_REEL_ERROR " + str(exc),
+                "text/plain; charset=utf-8",
+            )
+
+    image_url = env("MANUAL_POST_IMAGE_URL")
+    caption = env("MANUAL_POST_CAPTION")
+    if not image_url or not caption:
+        return _response(
+            start_response, "409 Conflict",
+            "GLOBALPLAY_FORCE_NO_QUEUED_MEDIA",
+            "text/plain; charset=utf-8",
+        )
+
+    fingerprint = hashlib.sha256((image_url + "\n" + caption).encode()).hexdigest()[:24]
+    done_key = "manual_post_done_" + fingerprint
+    with settings_db() as c:
+        done = c.execute("SELECT value FROM settings WHERE key=?", (done_key,)).fetchone()
+    if done and done[0]:
+        return _response(
+            start_response, "200 OK",
+            "GLOBALPLAY_FORCE_ALREADY_PUBLISHED media_id=" + done[0],
+            "text/plain; charset=utf-8",
+        )
+
+    try:
+        media_id = _publish_image_url_now(image_url, caption)
+        with settings_db() as c:
+            c.execute(
+                "INSERT INTO settings(key,value,updated) VALUES(?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
+                (done_key, media_id, time.time()),
+            )
+        print("GLOBALPLAY_FORCE_IMAGE_SUCCESS media_id=" + media_id, flush=True)
+        return _response(
+            start_response, "200 OK",
+            "GLOBALPLAY_FORCE_IMAGE_SUCCESS media_id=" + media_id,
+            "text/plain; charset=utf-8",
+        )
+    except Exception as exc:
+        return _response(
+            start_response, "400 Bad Request",
+            "GLOBALPLAY_FORCE_IMAGE_ERROR " + str(exc),
+            "text/plain; charset=utf-8",
+        )
+
+
 def process_manual_image_post_once():
     if env("MANUAL_POST_ON_START").lower() != "true":
         return
