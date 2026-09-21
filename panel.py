@@ -1203,9 +1203,8 @@ def _schedule_times():
             if not marker or marker[0] != policy_version:
                 now = time.time()
                 c.execute(
-                    "INSERT INTO settings(key,value,updated) VALUES('post_times',?,?,?)"
-                    .replace("(key,value,updated)", "(key,value,updated)")
-                    .replace("VALUES('post_times',?,?,?)", "VALUES('post_times',?,?)"),
+                    "INSERT INTO settings(key,value,updated) VALUES('post_times',?,?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
                     (desired_times, now),
                 )
                 c.execute(
