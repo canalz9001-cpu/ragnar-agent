@@ -150,6 +150,7 @@ def worker():
     while not _stop.wait(1):
         try:
             process_one()
+            panel.process_test_post_once()
             panel.process_publication_once()
         except Exception:
             LOG.error('worker_iteration_failed')
