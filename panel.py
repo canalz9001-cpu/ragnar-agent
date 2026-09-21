@@ -259,11 +259,18 @@ def _openai_status():
     result = {
         "configured": bool(key),
         "valid": None,
-        "label": "Não configurada" if not key else "Verificando",
-        "expiry": "A API comum não informa uma data de expiração da chave.",
-        "credits": "O saldo pré-pago não é exposto pela chave comum. Consulte Billing.",
+        "label": "Não configurada" if not key else "Chave cadastrada",
+        "expiry": "A chave da API não possui uma validade exibida automaticamente neste painel.",
+        "credits": (
+            "Adicione créditos na OpenAI para validar o uso do agente."
+            if key else
+            "Cadastre OPENAI_API_KEY no Railway."
+        ),
         "month_cost": None,
     }
+
+    # Verificação leve de autenticação. Ela NÃO é usada para concluir
+    # que falta de saldo significa chave inválida.
     if key:
         req = urllib.request.Request(
             "https://api.openai.com/v1/models",
@@ -273,18 +280,29 @@ def _openai_status():
             with urllib.request.urlopen(req, timeout=10) as response:
                 if 200 <= response.status < 300:
                     result["valid"] = True
-                    result["label"] = "Chave válida agora"
+                    result["label"] = "Chave cadastrada e autenticada"
+                    result["credits"] = "Autenticação OK. O saldo deve ser conferido no Billing da OpenAI."
         except urllib.error.HTTPError as exc:
-            result["valid"] = False if exc.code in (401, 403) else None
-            result["label"] = "Chave inválida" if result["valid"] is False else f"Resposta HTTP {exc.code}"
+            # Não rotular como 'chave inválida' aqui: falta de crédito,
+            # restrição de projeto ou permissão também pode impedir uso.
+            result["valid"] = None
+            result["label"] = "Chave cadastrada — uso não validado"
+            if exc.code == 429:
+                result["credits"] = "Sem crédito/cota ou limite atingido. Confira o Billing da OpenAI."
+            elif exc.code in (401, 403):
+                result["credits"] = "A API não autorizou esta verificação. Confira saldo, projeto e permissões após adicionar créditos."
+            else:
+                result["credits"] = f"A verificação retornou HTTP {exc.code}. Confira o Billing e tente novamente."
         except Exception:
-            result["label"] = "Não foi possível verificar agora"
+            result["valid"] = None
+            result["label"] = "Chave cadastrada — verificação indisponível"
+            result["credits"] = "Não foi possível verificar agora. O painel tentará novamente automaticamente."
 
     admin_key = env("OPENAI_ADMIN_KEY")
     if admin_key:
-        start = int(time.time()) - 31 * 86400
+        start_time = int(time.time()) - 31 * 86400
         url = "https://api.openai.com/v1/organization/costs?" + urllib.parse.urlencode(
-            {"start_time": start, "limit": 31}
+            {"start_time": start_time, "limit": 31}
         )
         req = urllib.request.Request(url, headers={"Authorization": "Bearer " + admin_key})
         try:
@@ -303,7 +321,6 @@ def _openai_status():
     _OPENAI_CACHE["at"] = now
     _OPENAI_CACHE["data"] = result
     return result
-
 
 def _railway_status():
     total, used, free = shutil.disk_usage(data_root())
@@ -329,9 +346,9 @@ def _dashboard(notice=""):
     rows = _media_rows()
 
     openai_badge = (
-        '<span class="status">CHAVE VÁLIDA</span>' if openai["valid"] is True
-        else '<span class="status bad">CHAVE INVÁLIDA</span>' if openai["valid"] is False
-        else '<span class="status warn">VERIFICAÇÃO PENDENTE</span>'
+        '<span class="status">CHAVE AUTENTICADA</span>' if openai["valid"] is True
+        else '<span class="status warn">CHAVE CADASTRADA</span>' if openai["configured"]
+        else '<span class="status bad">CHAVE NÃO CADASTRADA</span>'
     )
     openai_cost = (
         f'US$ {openai["month_cost"]:.2f} nos últimos 31 dias'
