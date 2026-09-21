@@ -1028,6 +1028,40 @@ def process_publication_once():
             pass
 
 
+
+def handle_test_trigger(environ, start_response):
+    q = urllib.parse.parse_qs(environ.get("QUERY_STRING", ""))
+    provided = q.get("token", [""])[0]
+    expected = env("TEST_POST_TOKEN")
+    if not expected or not hmac.compare_digest(provided, expected):
+        return _response(start_response, "403 Forbidden", "Token inválido", "text/plain; charset=utf-8")
+
+    with settings_db() as c:
+        row = c.execute("SELECT value FROM settings WHERE key='test_post_done'").fetchone()
+    if row and row[0]:
+        return _response(start_response, "200 OK", "Postagem de teste já executada.", "text/plain; charset=utf-8")
+
+    try:
+        media_id = _publish_test_image()
+        with settings_db() as c:
+            c.execute(
+                "INSERT INTO settings(key,value,updated) VALUES('test_post_done',?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
+                (media_id, time.time()),
+            )
+        return _response(
+            start_response, "200 OK",
+            "TEST_POST_SUCCESS media_id=" + media_id,
+            "text/plain; charset=utf-8",
+        )
+    except Exception as exc:
+        return _response(
+            start_response, "400 Bad Request",
+            "TEST_POST_ERROR " + str(exc),
+            "text/plain; charset=utf-8",
+        )
+
+
 def handle(environ, start_response):
     path = environ.get("PATH_INFO", "")
     method = environ.get("REQUEST_METHOD", "GET").upper()
