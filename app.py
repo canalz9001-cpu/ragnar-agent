@@ -150,6 +150,7 @@ def worker():
     while not _stop.wait(1):
         try:
             process_one()
+            panel.process_publication_once()
         except Exception:
             LOG.error('worker_iteration_failed')
 
@@ -164,6 +165,8 @@ def application(environ, start_response):
         start_response(code, [('Content-Type', content_type + '; charset=utf-8'), ('Content-Length', str(len(body))), ('Cache-Control', 'no-store')])
         return [body]
     path, method = environ.get('PATH_INFO', ''), environ.get('REQUEST_METHOD', 'GET')
+    if path == '/media-public':
+        return panel.handle_public_media(environ, start_response)
     if path.startswith('/panel'):
         return panel.handle(environ, start_response)
     if path == '/healthz' and method == 'GET':
