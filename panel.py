@@ -15,6 +15,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from PIL import Image, ImageDraw, ImageFont
 
 COOKIE_NAME = "ragnar_panel"
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".m4v"}
@@ -238,6 +239,17 @@ def _media_rows():
         ).fetchall()
 
 
+def _latest_uploads():
+    folder = data_root() / "uploads"
+    folder.mkdir(parents=True, exist_ok=True)
+    files = [
+        p for p in folder.iterdir()
+        if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS
+    ]
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return files[:8]
+
+
 def _status_badge(status):
     labels = {
         "ready": ("PRONTO PARA REVISÃO", ""),
@@ -344,6 +356,7 @@ def _dashboard(notice=""):
     openai = _openai_status()
     railway = _railway_status()
     rows = _media_rows()
+    uploads = _latest_uploads()
 
     openai_badge = (
         '<span class="status">CHAVE AUTENTICADA</span>' if openai["valid"] is True
@@ -401,7 +414,32 @@ def _dashboard(notice=""):
 </form>
 </div></div>"""
     if not videos:
-        videos = '<p class="muted">Envie um vídeo. O primeiro corte será gerado automaticamente e aparecerá aqui para aprovação.</p>'
+        videos = '<p class="muted">Nenhum corte pronto ainda. Assim que o processamento terminar, ele aparecerá aqui com os botões Aprovar e postar ou Não postar.</p>'
+
+    uploads_html = ""
+    for p in uploads:
+        oq = urllib.parse.quote(p.name)
+        mb = p.stat().st_size / (1024 * 1024)
+        uploads_html += f"""
+<div class="video-card">
+<div class="top" style="margin-bottom:4px">
+<div><strong>{html.escape(p.name)}</strong><div class="small">Vídeo original · {mb:.1f} MB</div></div>
+<span class="status warn">ENVIADO</span>
+</div>
+<video controls preload="metadata" src="/panel/media?kind=original&file={oq}"></video>
+<div class="actions">
+<form method="post" action="/panel/cut" class="actions">
+<input type="hidden" name="filename" value="{html.escape(p.name)}">
+<label class="small">Início (s)</label>
+<input style="width:95px" name="start" type="number" min="0" step="1" value="0">
+<label class="small">Duração (s)</label>
+<input style="width:95px" name="duration" type="number" min="5" max="90" value="30">
+<button class="warn" type="submit">Gerar corte</button>
+</form>
+</div>
+</div>"""
+    if not uploads_html:
+        uploads_html = '<p class="muted">Nenhum vídeo enviado ainda.</p>'
 
     content = f"""
 <div class="top">
@@ -491,8 +529,14 @@ def _dashboard(notice=""):
 </section>
 
 <section class="card full">
+<h2>Vídeos enviados</h2>
+<p class="muted">O vídeo original fica aqui mesmo se um corte falhar. Você pode assistir e escolher o ponto inicial e a duração.</p>
+{uploads_html}
+</section>
+
+<section class="card full">
 <h2>Cortes para aprovação</h2>
-<p class="muted">Veja o vídeo, aprove ou gere outro trecho. A publicação só começa depois da aprovação.</p>
+<p class="muted">O corte pronto aparece aqui com player. Só será publicado quando você clicar em <strong>Aprovar e postar</strong>.</p>
 {videos}
 </section>
 </div>"""
@@ -524,6 +568,38 @@ def _upload(environ):
     return target.name
 
 
+def _make_cta_overlay(path):
+    text = get_setting("banner_cta", DEFAULTS["banner_cta"])
+    img = Image.new("RGBA", (1080, 190), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle(
+        (35, 15, 1045, 175),
+        radius=34,
+        fill=(0, 0, 0, 190),
+        outline=(230, 45, 62, 255),
+        width=5,
+    )
+    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    size = 48
+    while size >= 28:
+        font = ImageFont.truetype(font_path, size=size)
+        box = draw.textbbox((0, 0), text, font=font)
+        if box[2] - box[0] <= 940:
+            break
+        size -= 2
+    box = draw.textbbox((0, 0), text, font=font)
+    tw, th = box[2] - box[0], box[3] - box[1]
+    draw.text(
+        ((1080 - tw) / 2, (190 - th) / 2 - 4),
+        text,
+        font=font,
+        fill=(255, 255, 255, 255),
+        stroke_width=2,
+        stroke_fill=(0, 0, 0, 255),
+    )
+    img.save(path)
+
+
 def _generate_cut(filename, start, duration):
     source = data_root() / "uploads" / _safe_name(filename)
     if not source.exists() or source.suffix.lower() not in VIDEO_EXTENSIONS:
@@ -532,35 +608,67 @@ def _generate_cut(filename, start, duration):
     duration_n = max(5.0, min(float(duration or 30), 90.0))
     cuts = data_root() / "cuts"
     cuts.mkdir(parents=True, exist_ok=True)
-    output = cuts / (source.stem + f"-corte-{int(start_n)}s-{int(duration_n)}s-{int(time.time())}.mp4")
-    cta_file = data_root() / ("cta-" + hashlib.sha1(output.name.encode()).hexdigest()[:10] + ".txt")
-    cta_file.write_text(get_setting("banner_cta", DEFAULTS["banner_cta"]), encoding="utf-8")
-    font = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-    vf = (
+    stamp = int(time.time())
+    output = cuts / (source.stem + f"-corte-{int(start_n)}s-{int(duration_n)}s-{stamp}.mp4")
+    overlay = data_root() / f"cta-overlay-{stamp}.png"
+    _make_cta_overlay(overlay)
+
+    filter_complex = (
+        "[0:v]setpts=PTS-STARTPTS,"
         "scale=1080:1920:force_original_aspect_ratio=increase,"
-        "crop=1080:1920,"
-        f"drawtext=fontfile={font}:textfile={cta_file}:"
-        "fontcolor=white:fontsize=48:borderw=4:bordercolor=black:"
-        "box=1:boxcolor=black@0.38:boxborderw=22:"
-        "x=(w-text_w)/2:y=h-190"
+        "crop=1080:1920,setsar=1[base];"
+        "[1:v]format=rgba[cta];"
+        "[base][cta]overlay=0:H-h-70:eof_action=repeat:shortest=0[outv]"
     )
     cmd = [
-        "ffmpeg", "-y", "-ss", str(start_n), "-i", str(source),
-        "-t", str(duration_n), "-vf", vf,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
-        "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(output),
+        "ffmpeg", "-y", "-fflags", "+genpts",
+        "-ss", str(start_n), "-i", str(source),
+        "-loop", "1", "-i", str(overlay),
+        "-filter_complex", filter_complex,
+        "-map", "[outv]", "-map", "0:a?",
+        "-t", str(duration_n),
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-preset", "veryfast", "-crf", "22",
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart", str(output),
     ]
-    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=260)
+    primary = subprocess.run(
+        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=280
+    )
+
+    # Compatibilidade extra para vídeos com timestamps/metadata incomuns.
+    # Se o overlay falhar, ainda tentamos gerar um corte 9:16 reproduzível.
+    result = primary
+    if primary.returncode != 0:
+        fallback_cmd = [
+            "ffmpeg", "-y", "-fflags", "+genpts",
+            "-ss", str(start_n), "-i", str(source),
+            "-t", str(duration_n),
+            "-vf",
+            "setpts=PTS-STARTPTS,"
+            "scale=1080:1920:force_original_aspect_ratio=increase,"
+            "crop=1080:1920,setsar=1,format=yuv420p",
+            "-map", "0:v:0", "-map", "0:a?",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+            "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart", str(output),
+        ]
+        result = subprocess.run(
+            fallback_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=280
+        )
+
     try:
-        cta_file.unlink(missing_ok=True)
+        overlay.unlink(missing_ok=True)
     except Exception:
         pass
-    if result.returncode != 0:
-        detail = result.stderr.decode("utf-8", "replace")[-600:]
-        raise RuntimeError("FFmpeg não conseguiu gerar o corte: " + detail)
+
+    if result.returncode != 0 or not output.exists() or output.stat().st_size < 1024:
+        err = result.stderr.decode("utf-8", "replace")
+        detail = (err[:1200] + "\n...\n" + err[-1000:]) if len(err) > 2300 else err
+        raise RuntimeError("Não foi possível gerar o corte deste vídeo. Detalhes técnicos: " + detail)
+
     _register_cut(source.name, output.name, start_n, duration_n)
     return output.name
-
 
 def _video_path(filename, kind="cut"):
     safe = _safe_name(filename)
@@ -777,7 +885,8 @@ def handle(environ, start_response):
 
     if path == "/panel/media" and method == "GET":
         q = urllib.parse.parse_qs(environ.get("QUERY_STRING", ""))
-        media = _video_path(q.get("file", [""])[0], "cut")
+        kind = "original" if q.get("kind", [""])[0] == "original" else "cut"
+        media = _video_path(q.get("file", [""])[0], kind)
         if not media:
             return _response(start_response, "404 Not Found", "Vídeo não encontrado", "text/plain; charset=utf-8")
         return _serve_file(environ, start_response, media)
