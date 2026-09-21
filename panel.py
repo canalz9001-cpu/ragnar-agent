@@ -11,6 +11,8 @@ import shutil
 import sqlite3
 import subprocess
 import time
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -254,6 +256,7 @@ def _status_badge(status):
     labels = {
         "ready": ("PRONTO PARA REVISÃO", ""),
         "approved": ("APROVADO", "warn"),
+        "queued": ("NA FILA", "warn"),
         "processing": ("ENVIANDO AO INSTAGRAM", "warn"),
         "published": ("PUBLICADO", ""),
         "rejected": ("REPROVADO", "bad"),
@@ -393,7 +396,7 @@ def _dashboard(notice=""):
             videos += f"""
 <form method="post" action="/panel/approve">
 <input type="hidden" name="cut" value="{html.escape(cut)}">
-<button class="good" type="submit">✓ Aprovar e postar</button>
+<button class="good" type="submit">✓ Aprovar para agenda</button>
 </form>
 <form method="post" action="/panel/reject">
 <input type="hidden" name="cut" value="{html.escape(cut)}">
@@ -403,7 +406,7 @@ def _dashboard(notice=""):
             videos += f"""
 <form method="post" action="/panel/approve">
 <input type="hidden" name="cut" value="{html.escape(cut)}">
-<button class="good" type="submit">Aprovar agora</button>
+<button class="good" type="submit">Aprovar para agenda</button>
 </form>"""
         videos += f"""
 <form method="post" action="/panel/cut" class="actions">
@@ -976,6 +979,78 @@ def _start_publish(cut):
 
 
 
+def _publish_image_url_now(image_url, caption, max_wait=75):
+    account = env("INSTAGRAM_ACCOUNT_ID")
+    if not account or not env("INSTAGRAM_ACCESS_TOKEN") or not env("META_API_VERSION"):
+        raise RuntimeError("Credenciais do Instagram não estão completas.")
+
+    created = _graph_request(
+        f"{account}/media",
+        "POST",
+        {"image_url": image_url, "caption": caption},
+    )
+    container_id = str(created.get("id", ""))
+    if not container_id:
+        raise RuntimeError("A Meta não retornou o ID do contêiner da publicação.")
+
+    deadline = time.time() + max_wait
+    last_status = ""
+    while time.time() < deadline:
+        time.sleep(3)
+        status = _graph_request(
+            f"{container_id}?fields=status_code,status",
+            "GET",
+        )
+        status_code = str(status.get("status_code", "")).upper()
+        last_status = str(status.get("status", "") or status_code)
+        if status_code == "FINISHED":
+            published = _graph_request(
+                f"{account}/media_publish",
+                "POST",
+                {"creation_id": container_id},
+            )
+            media_id = str(published.get("id", ""))
+            if not media_id:
+                raise RuntimeError("A Meta não retornou o ID da publicação.")
+            return media_id
+        if status_code in ("ERROR", "EXPIRED"):
+            raise RuntimeError("A Meta não conseguiu processar a imagem: " + last_status)
+
+    raise RuntimeError("A Meta ainda não deixou a imagem pronta para publicar: " + (last_status or "IN_PROGRESS"))
+
+
+def handle_commercial_trigger(environ, start_response):
+    q = urllib.parse.parse_qs(environ.get("QUERY_STRING", ""))
+    provided = q.get("token", [""])[0]
+    expected = env("TEST_POST_TOKEN")
+    if not expected or not hmac.compare_digest(provided, expected):
+        return _response(start_response, "403 Forbidden", "Token inválido", "text/plain; charset=utf-8")
+
+    image_url = env("MANUAL_POST_IMAGE_URL")
+    caption = env("MANUAL_POST_CAPTION")
+    if not image_url or not caption:
+        return _response(start_response, "400 Bad Request", "Conteúdo comercial não configurado", "text/plain; charset=utf-8")
+
+    fingerprint = hashlib.sha256((image_url + "\n" + caption).encode()).hexdigest()[:24]
+    done_key = "manual_post_done_" + fingerprint
+    with settings_db() as c:
+        row = c.execute("SELECT value FROM settings WHERE key=?", (done_key,)).fetchone()
+    if row and row[0]:
+        return _response(start_response, "200 OK", "COMMERCIAL_POST_ALREADY_PUBLISHED media_id=" + row[0], "text/plain; charset=utf-8")
+
+    try:
+        media_id = _publish_image_url_now(image_url, caption)
+        with settings_db() as c:
+            c.execute(
+                "INSERT INTO settings(key,value,updated) VALUES(?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
+                (done_key, media_id, time.time()),
+            )
+        return _response(start_response, "200 OK", "COMMERCIAL_POST_SUCCESS media_id=" + media_id, "text/plain; charset=utf-8")
+    except Exception as exc:
+        return _response(start_response, "400 Bad Request", "COMMERCIAL_POST_ERROR " + str(exc), "text/plain; charset=utf-8")
+
+
 def process_manual_image_post_once():
     if env("MANUAL_POST_ON_START").lower() != "true":
         return
@@ -1112,6 +1187,63 @@ def process_test_post_once():
                 (str(exc)[:1000], time.time()),
             )
         print("TEST_POST_ERROR " + str(exc), flush=True)
+
+
+def _schedule_times():
+    raw = get_setting("post_times", DEFAULTS["post_times"]) or ""
+    times = []
+    for part in raw.split(","):
+        part = part.strip()
+        if re.fullmatch(r"\d{2}:\d{2}", part):
+            hh, mm = map(int, part.split(":"))
+            if 0 <= hh <= 23 and 0 <= mm <= 59:
+                times.append((hh, mm))
+    return times[:10]
+
+
+def process_scheduled_posts_once():
+    times = _schedule_times()
+    if not times:
+        return
+
+    now = datetime.now(ZoneInfo("America/Sao_Paulo"))
+    for hh, mm in times:
+        slot = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        delta = now - slot
+        # Janela de 15 minutos para disparar o conteúdo aprovado do horário.
+        if delta.total_seconds() < 0 or delta.total_seconds() >= 15 * 60:
+            continue
+
+        slot_key = f"schedule_slot_{slot:%Y%m%d_%H%M}"
+        with settings_db() as c:
+            done = c.execute("SELECT value FROM settings WHERE key=?", (slot_key,)).fetchone()
+            if done and done[0]:
+                return
+            row = c.execute(
+                "SELECT cut FROM media WHERE status='queued' ORDER BY created LIMIT 1"
+            ).fetchone()
+
+        if not row:
+            return
+
+        cut = row[0]
+        try:
+            _start_publish(cut)
+            with settings_db() as c:
+                c.execute(
+                    "INSERT INTO settings(key,value,updated) VALUES(?,?,?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
+                    (slot_key, cut, time.time()),
+                )
+            print(f"SCHEDULE_POST_STARTED slot={slot:%Y-%m-%d_%H:%M} cut={cut}", flush=True)
+        except Exception as exc:
+            with settings_db() as c:
+                c.execute(
+                    "UPDATE media SET status='publish_failed',error=?,updated=? WHERE cut=?",
+                    (str(exc)[:700], time.time(), cut),
+                )
+            print("SCHEDULE_POST_ERROR " + str(exc), flush=True)
+        return
 
 
 def process_publication_once():
@@ -1285,23 +1417,14 @@ def handle(environ, start_response):
 
     if path == "/panel/approve" and method == "POST":
         cut = _safe_name(_parse_urlencoded(environ).get("cut", ""))
-        try:
-            with settings_db() as c:
-                c.execute("UPDATE media SET status='approved',error=NULL,updated=? WHERE cut=?", (time.time(), cut))
-            _start_publish(cut)
-            return _response(
-                start_response, "200 OK",
-                _dashboard("Corte aprovado. O Ragnar iniciou o envio para o Instagram e vai concluir a publicação assim que a Meta terminar o processamento.")
+        with settings_db() as c:
+            c.execute(
+                "UPDATE media SET status='queued',error=NULL,updated=? WHERE cut=?",
+                (time.time(), cut),
             )
-        except Exception as exc:
-            with settings_db() as c:
-                c.execute(
-                    "UPDATE media SET status='publish_failed',error=?,updated=? WHERE cut=?",
-                    (str(exc)[:700], time.time(), cut),
-                )
-            return _response(
-                start_response, "400 Bad Request",
-                _dashboard("O corte foi aprovado, mas a publicação não iniciou: " + str(exc))
-            )
+        return _response(
+            start_response, "200 OK",
+            _dashboard("Corte aprovado e colocado na agenda. O Ragnar publicará no próximo horário configurado.")
+        )
 
     return _response(start_response, "404 Not Found", "Página não encontrada", "text/plain; charset=utf-8")
