@@ -58,21 +58,23 @@ class RagnarTests(unittest.TestCase):
         app.enqueue(app.collect(self.payload()))
         with patch.dict(os.environ, {'AUTOMATION_ENABLED':'false'}),patch('app.send') as send:
             app.process_one(); send.assert_not_called()
-    def test_dm_echo_and_old_messages_ignored(self):
-        event={'sender':{'id':'789'},'recipient':{'id':'123'},'timestamp':time.time()*1000,'message':{'mid':'m1','text':'Oi'}}
+    def test_direct_messages_do_not_repeat_greeting(self):
+        event={'sender':{'id':'789'},'recipient':{'id':'123'},'timestamp':time.time()*1000,'message':{'mid':'m1','text':'TESTE'}}
         payload={'object':'instagram','entry':[{'id':'123','messaging':[event]}]}
-        self.assertEqual(len(app.collect(payload)),1)
-        event['message']['is_echo']=True
-        self.assertEqual(app.collect(payload),[])
-        event['message']['is_echo']=False; event['timestamp']=0
         self.assertEqual(app.collect(payload),[])
     def test_daily_limit(self):
         app.enqueue(app.collect(self.payload()))
         with patch.dict(os.environ, {'DAILY_ACTION_LIMIT':'0'}),patch('app.send') as send:
             app.process_one(); send.assert_not_called()
-    def test_greeting_has_correct_offer_and_links(self):
-        text=app.greeting()
-        for required in ['https://ragnarplay.online/','https://wa.me/553491341688','25,00','60,00','110,00','190,00','2 dispositivos']:
-            self.assertIn(required,text)
+    def test_interactive_message_has_clickable_buttons(self):
+        self.assertNotIn('TESTE', app.greeting())
+        message=app.interactive_message()
+        payload=message['attachment']['payload']
+        self.assertEqual(payload['template_type'],'button')
+        buttons=payload['buttons']
+        self.assertEqual(buttons[0]['title'],'Acessar site')
+        self.assertEqual(buttons[0]['url'],'https://ragnarplay.online/')
+        self.assertEqual(buttons[1]['title'],'Falar no WhatsApp')
+        self.assertTrue(buttons[1]['url'].startswith('https://wa.me/553491341688?text='))
 
 if __name__ == '__main__': unittest.main()
