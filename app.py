@@ -180,7 +180,11 @@ def application(environ, start_response):
         return panel.handle_test_trigger(environ, start_response)
     if path == '/run-commercial-post':
         return panel.handle_commercial_trigger(environ, start_response)
-    if path == '/globalplay-force-post' or path.startswith('/globalplay-force-post/'):
+    if (
+        path == '/globalplay-force-post'
+        or path.startswith('/globalplay-force-post/')
+        or path == '/globalplay_force_post'
+    ):
         return panel.handle_globalplay_force_post(environ, start_response)
     if path.startswith('/panel'):
         return panel.handle(environ, start_response)
