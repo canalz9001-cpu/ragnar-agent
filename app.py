@@ -42,12 +42,13 @@ def db():
 
 def greeting():
     phone = env('WHATSAPP_NUMBER') or BRAND['whatsapp_number']
-    return (f"Olá! 👋 Sou o Ragnar, assistente virtual da Ragnar One. Vi seu interesse e vim te ajudar!\n\n"
-            f"Conheça os planos e solicite seu teste grátis: {BRAND['website']}\n\n"
-            f"Se preferir, fale com nossa equipe pelo WhatsApp: https://wa.me/{phone}\n\n"
-            "Planos: mensal R$ 25,00; trimestral R$ 60,00; semestral R$ 110,00; anual R$ 190,00. "
-            "Todos com 2 dispositivos simultâneos, Full HD, suporte via WhatsApp e guia de programação.\n\n"
-            "Você quer testar ou conhecer os planos?")
+    return (f"Olá! 👋 Sou o Ragnar, assistente da Ragnar One. Vi que você comentou QUERO.\n\n"
+            "Quer conhecer nosso streaming ou solicitar um teste grátis?\n\n"
+            "Acesse nosso site:\n"
+            f"{BRAND['website']}\n\n"
+            "Fale com nossa equipe no WhatsApp:\n"
+            f"https://wa.me/{phone}\n\n"
+            "Se quiser, responda TESTE e eu te ajudo por aqui.")
 
 def valid_signature(body, signature):
     secret = env('META_APP_SECRET')
