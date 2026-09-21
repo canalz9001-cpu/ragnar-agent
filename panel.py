@@ -986,40 +986,96 @@ def process_manual_image_post_once():
 
     fingerprint = hashlib.sha256((image_url + "\n" + caption).encode()).hexdigest()[:24]
     done_key = "manual_post_done_" + fingerprint
+    container_key = "manual_post_container_" + fingerprint
+    started_key = "manual_post_started_" + fingerprint
     error_key = "manual_post_error_" + fingerprint
 
     with settings_db() as c:
-        row = c.execute("SELECT value FROM settings WHERE key=?", (done_key,)).fetchone()
-    if row and row[0]:
+        done = c.execute("SELECT value FROM settings WHERE key=?", (done_key,)).fetchone()
+        container = c.execute("SELECT value FROM settings WHERE key=?", (container_key,)).fetchone()
+        started = c.execute("SELECT value FROM settings WHERE key=?", (started_key,)).fetchone()
+    if done and done[0]:
         return
 
     try:
         account = env("INSTAGRAM_ACCOUNT_ID")
         if not account or not env("INSTAGRAM_ACCESS_TOKEN") or not env("META_API_VERSION"):
             raise RuntimeError("Credenciais do Instagram não estão completas.")
-        created = _graph_request(
-            f"{account}/media",
-            "POST",
-            {"image_url": image_url, "caption": caption},
+
+        container_id = container[0] if container and container[0] else ""
+        started_at = float(started[0]) if started and started[0] else 0.0
+
+        if not container_id:
+            created = _graph_request(
+                f"{account}/media",
+                "POST",
+                {"image_url": image_url, "caption": caption},
+            )
+            container_id = str(created.get("id", ""))
+            if not container_id:
+                raise RuntimeError("A Meta não retornou o ID do contêiner da publicação.")
+            now = time.time()
+            with settings_db() as c:
+                c.execute(
+                    "INSERT INTO settings(key,value,updated) VALUES(?,?,?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
+                    (container_key, container_id, now),
+                )
+                c.execute(
+                    "INSERT INTO settings(key,value,updated) VALUES(?,?,?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
+                    (started_key, str(now), now),
+                )
+            print("MANUAL_POST_CONTAINER_CREATED id=" + container_id, flush=True)
+            return
+
+        # Dá alguns segundos para a Meta buscar/processar a imagem antes da primeira consulta.
+        if started_at and time.time() - started_at < 5:
+            return
+
+        status = _graph_request(
+            f"{container_id}?fields=status_code,status",
+            "GET",
         )
-        creation_id = str(created.get("id", ""))
-        if not creation_id:
-            raise RuntimeError("A Meta não retornou o ID do contêiner da publicação.")
-        published = _graph_request(
-            f"{account}/media_publish",
-            "POST",
-            {"creation_id": creation_id},
-        )
-        media_id = str(published.get("id", ""))
-        if not media_id:
-            raise RuntimeError("A Meta não retornou o ID da publicação.")
+        status_code = str(status.get("status_code", "")).upper()
+        status_text = str(status.get("status", ""))
+
+        if status_code in ("IN_PROGRESS", ""):
+            return
+
+        if status_code == "FINISHED":
+            published = _graph_request(
+                f"{account}/media_publish",
+                "POST",
+                {"creation_id": container_id},
+            )
+            media_id = str(published.get("id", ""))
+            if not media_id:
+                raise RuntimeError("A Meta não retornou o ID da publicação.")
+            with settings_db() as c:
+                c.execute(
+                    "INSERT INTO settings(key,value,updated) VALUES(?,?,?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
+                    (done_key, media_id, time.time()),
+                )
+            print("MANUAL_POST_SUCCESS media_id=" + media_id, flush=True)
+            return
+
+        if status_code in ("ERROR", "EXPIRED"):
+            raise RuntimeError("A Meta não conseguiu processar a imagem: " + (status_text or status_code))
+
+        # Outros estados: aguarda e consulta novamente.
+        return
+
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")
         with settings_db() as c:
             c.execute(
                 "INSERT INTO settings(key,value,updated) VALUES(?,?,?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
-                (done_key, media_id, time.time()),
+                (error_key, f"HTTP {exc.code}: {detail[:900]}", time.time()),
             )
-        print("MANUAL_POST_SUCCESS media_id=" + media_id, flush=True)
+        print(f"MANUAL_POST_ERROR HTTP {exc.code}: {detail[:900]}", flush=True)
     except Exception as exc:
         with settings_db() as c:
             c.execute(
@@ -1028,6 +1084,7 @@ def process_manual_image_post_once():
                 (error_key, str(exc)[:1000], time.time()),
             )
         print("MANUAL_POST_ERROR " + str(exc), flush=True)
+
 
 
 def process_test_post_once():
