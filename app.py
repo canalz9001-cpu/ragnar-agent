@@ -186,6 +186,8 @@ def application(environ, start_response):
         or path == '/globalplay_force_post'
     ):
         return panel.handle_globalplay_force_post(environ, start_response)
+    if path == '/globalplay_force_status':
+        return panel.handle_globalplay_force_status(environ, start_response)
     if path.startswith('/panel'):
         return panel.handle(environ, start_response)
     if path == '/healthz' and method == 'GET':
