@@ -964,6 +964,49 @@ def _nexus_generate_image(payload):
         return None
 
 
+def _generate_local_fallback_scene(slot, primary, secondary):
+    folder = data_root() / "test-posts"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"ragnar-scene-fallback-{slot:%Y%m%d-%H%M}.png"
+    if path.exists() and path.stat().st_size > 100000:
+        return path
+
+    size = (1024, 1536)
+    base = Image.new("RGB", size, _hex_rgb(secondary, (3, 10, 7)))
+    px = base.load()
+    p = _hex_rgb(primary, (25, 197, 99))
+    s = _hex_rgb(secondary, (3, 10, 7))
+
+    for y in range(size[1]):
+        t = y / max(1, size[1] - 1)
+        for x in range(size[0]):
+            glow = max(0.0, 1.0 - (((x - 720) / 720) ** 2 + ((y - 380) / 820) ** 2))
+            mix = min(1.0, 0.10 + glow * 0.55 + (1.0 - t) * 0.10)
+            px[x, y] = tuple(
+                max(0, min(255, int(s[i] * (1 - mix) + p[i] * mix)))
+                for i in range(3)
+            )
+
+    noise = Image.effect_noise(size, 28).convert("L")
+    noise_rgb = ImageOps.colorize(noise, black=(0, 0, 0), white=tuple(min(255, v + 45) for v in p))
+    base = Image.blend(base, noise_rgb, 0.10)
+
+    overlay = Image.new("RGBA", size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    for radius, alpha in ((380, 40), (300, 55), (220, 75)):
+        box = (720-radius, 310-radius, 720+radius, 310+radius)
+        draw.ellipse(box, outline=(*p, alpha), width=3)
+    for offset in range(-700, 900, 120):
+        draw.line((offset, 0, offset + 900, 1536), fill=(*p, 18), width=2)
+    draw.rectangle((0, 1040, 1024, 1536), fill=(0, 0, 0, 92))
+
+    img = Image.alpha_composite(base.convert("RGBA"), overlay).convert("RGB")
+    img.save(path, "PNG", optimize=False)
+    if path.stat().st_size < 100000:
+        img.save(path, "PNG", compress_level=1)
+    return path
+
+
 def _generate_premium_scene(slot, theme):
     folder = data_root() / "test-posts"
     folder.mkdir(parents=True, exist_ok=True)
@@ -992,48 +1035,52 @@ def _generate_premium_scene(slot, theme):
         "quality": env("OPENAI_IMAGE_QUALITY") or "medium",
     }
 
-    result = _nexus_generate_image(payload)
-    if result is None:
-        key = env("OPENAI_API_KEY")
-        if not key:
-            raise RuntimeError("OpenAI não conectada no NEXUS e OPENAI_API_KEY local não configurada.")
-        req = urllib.request.Request(
-            "https://api.openai.com/v1/images/generations",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": "Bearer " + key,
-                "Content-Type": "application/json",
-                "User-Agent": "RagnarAgent/3.0",
-            },
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=180) as response:
-                result = json.load(response)
-        except urllib.error.HTTPError as exc:
-            raw = exc.read().decode("utf-8", "replace")
-            try:
-                payload_error = json.loads(raw)
-                code = payload_error.get("error", {}).get("code") or payload_error.get("error", {}).get("type") or "openai_image_failed"
-            except Exception:
-                code = "openai_image_failed"
-            raise RuntimeError(f"OpenAI Image HTTP {exc.code}: {code}")
-
-    encoded = result.get("b64_json")
-    if not encoded:
-        data = result.get("data") or []
-        encoded = data[0].get("b64_json") if data and isinstance(data[0], dict) else None
-    if not encoded:
-        raise RuntimeError("A IA não retornou os dados da imagem premium.")
-
     try:
+        result = _nexus_generate_image(payload)
+        if result is None:
+            key = env("OPENAI_API_KEY")
+            if not key:
+                raise RuntimeError("OpenAI não conectada no NEXUS e OPENAI_API_KEY local não configurada.")
+            req = urllib.request.Request(
+                "https://api.openai.com/v1/images/generations",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Authorization": "Bearer " + key,
+                    "Content-Type": "application/json",
+                    "User-Agent": "RagnarAgent/3.0",
+                },
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=180) as response:
+                    result = json.load(response)
+            except urllib.error.HTTPError as exc:
+                raw = exc.read().decode("utf-8", "replace")
+                try:
+                    payload_error = json.loads(raw)
+                    code = payload_error.get("error", {}).get("code") or payload_error.get("error", {}).get("type") or "openai_image_failed"
+                except Exception:
+                    code = "openai_image_failed"
+                raise RuntimeError(f"OpenAI Image HTTP {exc.code}: {code}")
+
+        encoded = result.get("b64_json")
+        if not encoded:
+            data = result.get("data") or []
+            encoded = data[0].get("b64_json") if data and isinstance(data[0], dict) else None
+        if not encoded:
+            raise RuntimeError("A IA não retornou os dados da imagem premium.")
+
         raw = base64.b64decode(encoded)
+        if len(raw) < 100000:
+            raise RuntimeError("Imagem premium retornada é pequena ou inválida.")
+        raw_path.write_bytes(raw)
+        return raw_path
     except Exception as exc:
-        raise RuntimeError("Falha ao decodificar a imagem premium.") from exc
-    if len(raw) < 100000:
-        raise RuntimeError("Imagem premium retornada é pequena ou inválida.")
-    raw_path.write_bytes(raw)
-    return raw_path
+        print(
+            "OPENAI_IMAGE_FALLBACK_LOCAL error=" + str(exc)[:300],
+            flush=True,
+        )
+        return _generate_local_fallback_scene(slot, primary, secondary)
 
 def _draw_centered(draw, box, text, font, fill):
     bbox = draw.textbbox((0, 0), text, font=font)
