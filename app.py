@@ -377,6 +377,10 @@ def application(environ, start_response):
     method = environ.get("REQUEST_METHOD", "GET")
 
     if path == "/nexus/status" and method == "GET":
+        expected = env("NEXUS_AGENT_TOKEN")
+        provided = environ.get("HTTP_AUTHORIZATION", "")
+        if not expected or not provided.startswith("Bearer ") or not hmac.compare_digest(provided[7:], expected):
+            return reply("401 Unauthorized", {"error": "unauthorized"})
         return reply("200 OK", panel.nexus_status_snapshot())
     if path == "/media-public":
         return panel.handle_public_media(environ, start_response)
