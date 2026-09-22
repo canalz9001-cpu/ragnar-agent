@@ -146,6 +146,9 @@ def process_one():
     LOG.info('delivery_status=%s', status)
 
 _stop = threading.Event()
+_worker_thread = None
+_worker_lock = threading.Lock()
+
 def worker():
     while not _stop.wait(1):
         try:
@@ -155,12 +158,22 @@ def worker():
             panel.process_test_post_once()
             panel.process_publication_once()
         except Exception:
-            LOG.error('worker_iteration_failed')
+            LOG.exception('worker_iteration_failed')
 
 def start_worker():
-    with db() as c:
-        c.execute("UPDATE jobs SET status='uncertain',error='restart_during_send' WHERE status='sending'")
-    threading.Thread(target=worker, daemon=True).start()
+    global _worker_thread
+    with _worker_lock:
+        if _worker_thread is not None and _worker_thread.is_alive():
+            return
+        with db() as c:
+            c.execute("UPDATE jobs SET status='uncertain',error='restart_during_send' WHERE status='sending'")
+        _worker_thread = threading.Thread(target=worker, daemon=True, name="ragnar-background-worker")
+        _worker_thread.start()
+        print("BACKGROUND_WORKER_STARTED", flush=True)
+
+# Inicia também na importação do módulo. O hook do Gunicorn chama start_worker()
+# novamente, mas a função é idempotente e não cria uma segunda thread.
+start_worker()
 
 def application(environ, start_response):
     def reply(code, data, content_type='application/json'):
