@@ -926,11 +926,45 @@ def _scheduled_theme(slot):
     }
 
 
-def _generate_premium_scene(slot, theme):
-    key = env("OPENAI_API_KEY")
-    if not key:
-        raise RuntimeError("OPENAI_API_KEY não configurada para gerar o criativo premium.")
+def _nexus_generate_image(payload):
+    token = env("NEXUS_AGENT_TOKEN")
+    if not token:
+        return None
 
+    url = env("NEXUS_OPENAI_IMAGE_URL") or (
+        "https://servidor-global-play-production.up.railway.app/"
+        "api/agent/ragnar-one/openai/images"
+    )
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": "Bearer " + token,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "RagnarAgent-Nexus/1.0",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=180) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", "replace")
+        if exc.code == 409:
+            return None
+        try:
+            payload_error = json.loads(raw)
+            code = str(payload_error.get("error") or "openai_image_failed")
+        except Exception:
+            code = "openai_image_failed"
+        raise RuntimeError(f"NEXUS OpenAI HTTP {exc.code}: {code}")
+    except Exception:
+        LOG.warning("nexus_openai_proxy_unavailable", exc_info=True)
+        return None
+
+
+def _generate_premium_scene(slot, theme):
     folder = data_root() / "test-posts"
     folder.mkdir(parents=True, exist_ok=True)
     raw_path = folder / f"ragnar-scene-green-v3-{slot:%Y%m%d-%H%M}.png"
@@ -957,25 +991,38 @@ def _generate_premium_scene(slot, theme):
         "size": "1024x1536",
         "quality": env("OPENAI_IMAGE_QUALITY") or "medium",
     }
-    req = urllib.request.Request(
-        "https://api.openai.com/v1/images/generations",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": "Bearer " + key,
-            "Content-Type": "application/json",
-            "User-Agent": "RagnarAgent/3.0",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=180) as response:
-            result = json.load(response)
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", "replace")
-        raise RuntimeError(f"OpenAI Image HTTP {exc.code}: {detail[:700]}")
 
-    data = result.get("data") or []
-    encoded = data[0].get("b64_json") if data and isinstance(data[0], dict) else None
+    result = _nexus_generate_image(payload)
+    if result is None:
+        key = env("OPENAI_API_KEY")
+        if not key:
+            raise RuntimeError("OpenAI não conectada no NEXUS e OPENAI_API_KEY local não configurada.")
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/images/generations",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": "Bearer " + key,
+                "Content-Type": "application/json",
+                "User-Agent": "RagnarAgent/3.0",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=180) as response:
+                result = json.load(response)
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8", "replace")
+            try:
+                payload_error = json.loads(raw)
+                code = payload_error.get("error", {}).get("code") or payload_error.get("error", {}).get("type") or "openai_image_failed"
+            except Exception:
+                code = "openai_image_failed"
+            raise RuntimeError(f"OpenAI Image HTTP {exc.code}: {code}")
+
+    encoded = result.get("b64_json")
+    if not encoded:
+        data = result.get("data") or []
+        encoded = data[0].get("b64_json") if data and isinstance(data[0], dict) else None
     if not encoded:
         raise RuntimeError("A IA não retornou os dados da imagem premium.")
 
@@ -987,7 +1034,6 @@ def _generate_premium_scene(slot, theme):
         raise RuntimeError("Imagem premium retornada é pequena ou inválida.")
     raw_path.write_bytes(raw)
     return raw_path
-
 
 def _draw_centered(draw, box, text, font, fill):
     bbox = draw.textbbox((0, 0), text, font=font)
