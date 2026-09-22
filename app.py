@@ -376,6 +376,8 @@ def application(environ, start_response):
     path = environ.get("PATH_INFO", "")
     method = environ.get("REQUEST_METHOD", "GET")
 
+    if path == "/nexus/status" and method == "GET":
+        return reply("200 OK", panel.nexus_status_snapshot())
     if path == "/media-public":
         return panel.handle_public_media(environ, start_response)
     if path == "/public-file":

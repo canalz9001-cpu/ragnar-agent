@@ -50,6 +50,7 @@ DEFAULTS = {
 }
 
 _OPENAI_CACHE = {"at": 0.0, "data": None}
+_NEXUS_CONFIG_CACHE = {"at": 0.0, "data": None}
 
 
 def env(name):
@@ -888,42 +889,38 @@ def _wrap_lines(draw, text, font, max_width):
 
 
 def _scheduled_theme(slot):
-    themes = {
-        9: {
-            "kicker": "STREAMING ESTÁVEL",
-            "headline": "Seu streaming trava justo na hora do jogo?",
-            "support": "Mais estabilidade, conteúdo e suporte para você assistir sem estresse.",
-            "scene": (
-                "A confident adult man relaxing on a modern dark sofa holding a smartphone, "
-                "with a large television behind him showing a generic live football match in a packed stadium. "
-                "Luxury home entertainment room, premium cinematic advertising photography, dark black interior, "
-                "emerald green accent lighting, realistic skin, shallow depth of field, polished commercial look."
-            ),
-        },
-        12: {
-            "kicker": "ENTRETENIMENTO PREMIUM",
-            "headline": "Chega de travar bem na melhor hora",
-            "support": "Filmes, séries e entretenimento com mais estabilidade e suporte.",
-            "scene": (
-                "A stylish couple relaxing together in a sophisticated dark living room, watching a large smart TV. "
-                "The TV shows a generic cinematic entertainment interface with movie and series thumbnails, while a tablet "
-                "and smartphone are visible nearby. Premium streaming advertisement photography, black environment, "
-                "emerald green accent lights, realistic, elegant, high-end, cinematic."
-            ),
-        },
-        18: {
-            "kicker": "HOJE É DIA DE JOGO",
-            "headline": "Não deixe o travamento estragar o melhor lance",
-            "support": "Ragnar One: mais estabilidade e suporte para curtir cada momento.",
-            "scene": (
-                "An exciting evening football watch party in a premium modern living room, one adult viewer in foreground "
-                "holding a smartphone while a large TV displays a generic football match under stadium lights. "
-                "Cinematic sports advertising photography, black and emerald green color palette, dramatic green rim light, "
-                "luxury streaming setup, realistic, energetic, polished commercial image."
-            ),
-        },
+    cfg = _nexus_config()
+    profile = _posting_profile()
+    brief = _content_brief_for_slot(slot)
+    niche = str(cfg.get("niche") or "Streaming")
+    audience = str(profile.get("targetAudience") or "Misto")
+    strategy = str(profile.get("contentStrategy") or "Vendas + engajamento")
+    style = str(profile.get("visualStyle") or "Tecnológico premium")
+    focus = str(profile.get("contentFocus") or brief or "Conteúdo comercial e de engajamento")
+    tone = str(profile.get("tone") or "Firme, direto e profissional")
+    avoid = str(profile.get("avoidTopics") or "Promessas irreais e poluição visual")
+
+    headline = brief or focus
+    if len(headline) > 92:
+        headline = headline[:89].rstrip() + "..."
+    support = f"{strategy} para {audience}. {focus}"
+    if len(support) > 150:
+        support = support[:147].rstrip() + "..."
+
+    scene = (
+        f"Create a premium social-media advertising scene for the niche {niche}. "
+        f"Target audience: {audience}. Campaign strategy: {strategy}. "
+        f"Creative brief for this post: {brief or focus}. "
+        f"Visual style: {style}. Communication tone: {tone}. "
+        f"Avoid: {avoid}. Show a realistic scene that clearly supports the brief, "
+        "with polished commercial photography and strong visual storytelling."
+    )
+    return {
+        "kicker": strategy.upper()[:30],
+        "headline": headline,
+        "support": support,
+        "scene": scene,
     }
-    return themes.get(slot.hour, themes[18])
 
 
 def _generate_premium_scene(slot, theme):
@@ -937,13 +934,18 @@ def _generate_premium_scene(slot, theme):
     if raw_path.exists() and raw_path.stat().st_size > 100000:
         return raw_path
 
+    cfg = _nexus_config()
+    profile = _posting_profile()
+    primary = str(cfg.get("primaryColor") or "#19c563")
+    secondary = str(cfg.get("secondaryColor") or "#030a07")
     prompt = (
-        "Create a premium vertical social media advertising photograph for a streaming brand. "
+        "Create a premium vertical social media advertising photograph. "
         "NO TEXT, NO LETTERS, NO LOGOS, NO WATERMARKS, NO UI WORDS. "
-        "The final design will add typography later. Keep important faces and TV content away from the bottom 32 percent "
-        "because that area will hold typography and a call-to-action. Use a high-end cinematic commercial aesthetic. "
-        "Brand colors are BLACK, EMERALD GREEN and WHITE only; do not use red as an accent. "
-        "Show rich visual storytelling with real people and devices; avoid a plain background or poster-like text card. "
+        "The final design will add typography later. Keep important subjects away from the bottom 32 percent "
+        "because that area will hold typography and a call-to-action. "
+        f"Use the client's preferred visual style: {profile.get('visualStyle') or 'premium cinematic'}. "
+        f"Use the client's main brand color {primary} and secondary color {secondary} as lighting/accent inspiration. "
+        "Show rich visual storytelling; avoid a plain background or poster-like text card. "
         + theme["scene"]
     )
     payload = {
@@ -994,7 +996,21 @@ def _draw_centered(draw, box, text, font, fill):
 def _create_scheduled_post_image(slot):
     folder = data_root() / "test-posts"
     folder.mkdir(parents=True, exist_ok=True)
-    path = folder / f"ragnar-premium-green-v3-{slot:%Y%m%d-%H%M}.png"
+    cfg = _nexus_config()
+    profile = _posting_profile()
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            {
+                "slot": slot.strftime("%Y%m%d-%H%M"),
+                "primary": cfg.get("primaryColor"),
+                "secondary": cfg.get("secondaryColor"),
+                "profile": profile,
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()[:10]
+    path = folder / f"ragnar-premium-nexus-{slot:%Y%m%d-%H%M}-{fingerprint}.png"
     if path.exists() and path.is_file() and path.stat().st_size > 150000:
         return path
 
@@ -1031,11 +1047,12 @@ def _create_scheduled_post_image(slot):
     cta = ImageFont.truetype(font_bold, 49)
     footer = ImageFont.truetype(font_regular, 25)
 
-    GREEN = (25, 197, 99, 255)
-    GREEN_DARK = (10, 92, 52, 235)
+    primary_rgb, secondary_rgb = _live_brand_colors()
+    GREEN = (*primary_rgb, 255)
+    GREEN_DARK = (*tuple(max(0, int(v * 0.55)) for v in primary_rgb), 235)
     WHITE = (248, 250, 249, 255)
     MUTED = (204, 218, 210, 255)
-    BLACK = (3, 10, 7, 238)
+    BLACK = (*secondary_rgb, 238)
 
     # Marca no topo.
     draw.rounded_rectangle((58, 45, 1022, 170), radius=28, fill=(0, 0, 0, 145))
@@ -1075,9 +1092,16 @@ def _create_scheduled_post_image(slot):
     # CTA.
     cta_box = (76, 1148, 1004, 1265)
     draw.rounded_rectangle(cta_box, radius=50, fill=GREEN, outline=(106, 255, 169, 255), width=3)
-    _draw_centered(draw, (cta_box[0], cta_box[1] + 28, cta_box[2], cta_box[3]), "COMENTE QUERO", cta, WHITE)
+    profile = _posting_profile()
+    cta_text = str(profile.get("cta") or 'Comente "QUERO" e saiba mais')
+    short_cta = cta_text.replace('"', "").upper()
+    if len(short_cta) > 31:
+        short_cta = short_cta[:28].rstrip() + "..."
+    _draw_centered(draw, (cta_box[0], cta_box[1] + 28, cta_box[2], cta_box[3]), short_cta, cta, WHITE)
 
-    draw.text((76, 1300), "@ragnarplay1   •   ragnarplay.online", font=footer, fill=WHITE)
+    cfg = _nexus_config()
+    footer_text = str(cfg.get("instagram") or "@ragnarplay1")
+    draw.text((76, 1300), footer_text, font=footer, fill=WHITE)
 
     # Regra mínima de qualidade: nunca publicar um arquivo vazio/pequeno.
     img = img.convert("RGB")
@@ -1093,11 +1117,14 @@ def _create_scheduled_post_image(slot):
 
 def _scheduled_caption(slot):
     theme = _scheduled_theme(slot)
+    profile = _posting_profile()
+    cta = str(profile.get("cta") or 'Comente "QUERO" e saiba mais')
+    hashtags = str(profile.get("hashtags") or "#RagnarOne #Streaming #Entretenimento")
     return (
         theme["headline"] + "\n\n"
         + theme["support"] + "\n\n"
-        + 'Comente "QUERO" e saiba mais.\n\n'
-        + "#RagnarOne #Streaming #FutebolAoVivo #FilmesESeries #Entretenimento"
+        + cta + "\n\n"
+        + hashtags
     )
 
 
@@ -1440,26 +1467,90 @@ def process_test_post_once():
 
 
 
-def _schedule_times():
-    # Política fixa do Ragnar One: três publicações diárias no horário de São Paulo.
-    # Não depende de valores antigos persistidos no volume do Railway.
-    desired_times = "09:00, 12:00, 18:00"
+def _nexus_config():
+    """Read the client's live editorial rules from NEXUS AI.
+
+    The cache prevents a network request on every worker tick. If NEXUS is
+    temporarily unavailable, the last good configuration remains active.
+    """
+    now = time.time()
+    if _NEXUS_CONFIG_CACHE["data"] is not None and now - _NEXUS_CONFIG_CACHE["at"] < 45:
+        return _NEXUS_CONFIG_CACHE["data"]
+
+    url = env("NEXUS_CONFIG_URL") or (
+        "https://servidor-global-play-production.up.railway.app/"
+        "api/agent-config/ragnar-one"
+    )
     try:
-        now = time.time()
-        with settings_db() as c:
-            c.execute(
-                "INSERT INTO settings(key,value,updated) VALUES('post_times',?,?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
-                (desired_times, now),
-            )
-            c.execute(
-                "INSERT INTO settings(key,value,updated) VALUES('schedule_policy_version',?,?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
-                ("2026-09-22_fixed_09-12-18", now),
-            )
-    except sqlite3.Error:
-        pass
-    return [(9, 0), (12, 0), (18, 0)]
+        req = urllib.request.Request(
+            url,
+            headers={"Accept": "application/json", "User-Agent": "RagnarAgent-Nexus/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=8) as response:
+            payload = json.load(response)
+        if not isinstance(payload, dict):
+            raise ValueError("invalid_nexus_payload")
+        _NEXUS_CONFIG_CACHE["at"] = now
+        _NEXUS_CONFIG_CACHE["data"] = payload
+        return payload
+    except Exception:
+        LOG.warning("nexus_config_unavailable", exc_info=True)
+        _NEXUS_CONFIG_CACHE["at"] = now
+        return _NEXUS_CONFIG_CACHE["data"] or {}
+
+
+def _posting_profile():
+    cfg = _nexus_config()
+    profile = cfg.get("postingProfile") if isinstance(cfg, dict) else {}
+    return profile if isinstance(profile, dict) else {}
+
+
+def _hex_rgb(value, fallback):
+    raw = str(value or "").strip()
+    if re.fullmatch(r"#[0-9a-fA-F]{6}", raw):
+        return tuple(int(raw[i:i+2], 16) for i in (1, 3, 5))
+    return fallback
+
+
+def _live_brand_colors():
+    cfg = _nexus_config()
+    primary = _hex_rgb(cfg.get("primaryColor"), (25, 197, 99))
+    secondary = _hex_rgb(cfg.get("secondaryColor"), (3, 10, 7))
+    return primary, secondary
+
+
+def _content_brief_for_slot(slot):
+    profile = _posting_profile()
+    times = _schedule_times()
+    index = 0
+    for i, (hh, mm) in enumerate(times):
+        if (hh, mm) == (slot.hour, slot.minute):
+            index = i
+            break
+    fields = ["morningTheme", "afternoonTheme", "eveningTheme"]
+    field = fields[min(index, len(fields) - 1)]
+    return str(profile.get(field) or profile.get("contentFocus") or "").strip()
+
+
+def _schedule_times():
+    cfg = _nexus_config()
+    raw = cfg.get("postTimes") if isinstance(cfg, dict) else None
+    if not isinstance(raw, list) or not raw:
+        raw = [x.strip() for x in str(get_setting("post_times", DEFAULTS["post_times"])).split(",")]
+
+    parsed = []
+    seen = set()
+    for value in raw:
+        match = re.fullmatch(r"([01]\d|2[0-3]):([0-5]\d)", str(value).strip())
+        if not match:
+            continue
+        item = (int(match.group(1)), int(match.group(2)))
+        if item not in seen:
+            seen.add(item)
+            parsed.append(item)
+
+    return sorted(parsed)[:6] or [(9, 0), (12, 0), (18, 0)]
+
 
 def process_scheduled_posts_once():
     times = _schedule_times()
@@ -1624,6 +1715,31 @@ def handle_test_trigger(environ, start_response):
             "TEST_POST_ERROR " + str(exc),
             "text/plain; charset=utf-8",
         )
+
+
+def nexus_status_snapshot():
+    openai = _openai_status()
+    railway = _railway_status()
+    cfg = _nexus_config()
+    return {
+        "agent": "Ragnar",
+        "online": True,
+        "nexus_connected": bool(cfg),
+        "post_times": [f"{h:02d}:{m:02d}" for h, m in _schedule_times()],
+        "openai": {
+            "configured": bool(openai.get("configured")),
+            "authenticated": openai.get("valid") is True,
+            "month_cost_usd": openai.get("month_cost"),
+            "status": openai.get("label"),
+        },
+        "railway": {
+            "project": railway.get("project"),
+            "environment": railway.get("environment"),
+            "disk_used_mb": round(float(railway.get("disk_used_mb") or 0), 1),
+            "disk_free_mb": round(float(railway.get("disk_free_mb") or 0), 1),
+            "billing_connected": bool(railway.get("billing_connected")),
+        },
+    }
 
 
 def handle(environ, start_response):
