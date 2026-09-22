@@ -1539,7 +1539,7 @@ def _nexus_config():
             url,
             headers=headers,
         )
-        with urllib.request.urlopen(req, timeout=8) as response:
+        with urllib.request.urlopen(req, timeout=20) as response:
             payload = json.load(response)
         if not isinstance(payload, dict):
             raise ValueError("invalid_nexus_payload")
@@ -1547,7 +1547,7 @@ def _nexus_config():
         _NEXUS_CONFIG_CACHE["data"] = payload
         return payload
     except Exception:
-        LOG.warning("nexus_config_unavailable", exc_info=True)
+        LOG.warning("nexus_config_unavailable")
         _NEXUS_CONFIG_CACHE["at"] = now
         return _NEXUS_CONFIG_CACHE["data"] or {}
 
