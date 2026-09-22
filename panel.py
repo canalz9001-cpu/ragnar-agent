@@ -1344,17 +1344,30 @@ def process_scheduled_posts_once():
 
     with settings_db() as c:
         done = c.execute("SELECT value FROM settings WHERE key=?", (slot_key,)).fetchone()
-        if done and done[0]:
-            return
         attempt = c.execute("SELECT value FROM settings WHERE key=?", (attempt_key,)).fetchone()
+        last_error = c.execute("SELECT value FROM settings WHERE key=?", (error_key,)).fetchone()
 
-    # Evita martelar a Meta em caso de erro temporário. Tenta novamente após 10 min.
+    attempt_age = None
     if attempt and attempt[0]:
         try:
-            if time.time() - float(attempt[0]) < 10 * 60:
-                return
+            attempt_age = max(0, time.time() - float(attempt[0]))
         except (TypeError, ValueError):
-            pass
+            attempt_age = None
+    print(
+        "SCHEDULE_IMAGE_CHECK "
+        f"slot={slot:%Y-%m-%d_%H:%M} "
+        f"done={bool(done and done[0])} "
+        f"attempt_age={attempt_age if attempt_age is not None else 'none'} "
+        f"last_error={str(last_error[0])[:180] if last_error and last_error[0] else 'none'}",
+        flush=True,
+    )
+
+    if done and done[0]:
+        return
+
+    # Evita martelar a Meta em caso de erro temporário. Tenta novamente após 10 min.
+    if attempt_age is not None and attempt_age < 10 * 60:
+        return
 
     now_ts = time.time()
     with settings_db() as c:
