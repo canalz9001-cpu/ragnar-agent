@@ -1353,15 +1353,6 @@ def process_scheduled_posts_once():
             attempt_age = max(0, time.time() - float(attempt[0]))
         except (TypeError, ValueError):
             attempt_age = None
-    print(
-        "SCHEDULE_IMAGE_CHECK "
-        f"slot={slot:%Y-%m-%d_%H:%M} "
-        f"done={bool(done and done[0])} "
-        f"attempt_age={attempt_age if attempt_age is not None else 'none'} "
-        f"last_error={str(last_error[0])[:180] if last_error and last_error[0] else 'none'}",
-        flush=True,
-    )
-
     if done and done[0]:
         return
 
