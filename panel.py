@@ -865,6 +865,110 @@ def _create_test_post_image():
     return path
 
 
+
+def _wrap_lines(draw, text, font, max_width):
+    words = str(text).split()
+    lines = []
+    current = ""
+    for word in words:
+        candidate = (current + " " + word).strip()
+        box = draw.textbbox((0, 0), candidate, font=font)
+        if current and box[2] - box[0] > max_width:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return lines
+
+
+def _scheduled_theme(slot):
+    themes = {
+        9: {
+            "kicker": "COMECE O DIA SEM TRAVAR",
+            "headline": "Seu streaming trava justo na hora do jogo?",
+            "support": "Estabilidade e suporte fazem diferença quando cada lance importa.",
+        },
+        12: {
+            "kicker": "ENTRETENIMENTO SEM ESTRESSE",
+            "headline": "Filmes e séries travando acabam com a experiência.",
+            "support": "Tenha uma experiência mais estável para assistir quando quiser.",
+        },
+        18: {
+            "kicker": "HOJE TEM JOGO?",
+            "headline": "Não deixe o travamento decidir o melhor momento da partida.",
+            "support": "Ragnar One: estabilidade, conteúdo e suporte para você aproveitar.",
+        },
+    }
+    return themes.get(slot.hour, themes[18])
+
+
+def _create_scheduled_post_image(slot):
+    folder = data_root() / "test-posts"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"ragnar-auto-{slot:%Y%m%d-%H%M}.png"
+    if path.exists() and path.is_file():
+        return path
+
+    theme = _scheduled_theme(slot)
+    img = Image.new("RGB", (1080, 1350), (6, 13, 20))
+    draw = ImageDraw.Draw(img)
+    font_bold = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    font_regular = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    brand = ImageFont.truetype(font_bold, 82)
+    kicker = ImageFont.truetype(font_bold, 31)
+    headline = ImageFont.truetype(font_bold, 64)
+    support = ImageFont.truetype(font_regular, 36)
+    cta = ImageFont.truetype(font_bold, 54)
+    footer = ImageFont.truetype(font_regular, 28)
+
+    # Fundo com profundidade, mantendo visual premium e limpo.
+    for y in range(1350):
+        shade = int(6 + (y / 1350) * 11)
+        draw.line((0, y, 1080, y), fill=(shade, shade + 7, shade + 13))
+    draw.ellipse((650, -170, 1250, 430), fill=(32, 16, 23))
+    draw.ellipse((-260, 850, 380, 1490), fill=(11, 27, 38))
+
+    draw.rounded_rectangle((62, 62, 1018, 1288), radius=48, fill=(9, 19, 28), outline=(226, 45, 62), width=6)
+    draw.text((105, 125), "RAGNAR", font=brand, fill=(245, 247, 250))
+    draw.text((600, 125), "ONE", font=brand, fill=(226, 45, 62))
+    draw.rounded_rectangle((105, 270, 635, 332), radius=25, fill=(226, 45, 62))
+    draw.text((132, 282), theme["kicker"], font=kicker, fill=(255, 255, 255))
+
+    y = 415
+    for line in _wrap_lines(draw, theme["headline"], headline, 820):
+        draw.text((105, y), line, font=headline, fill=(245, 247, 250))
+        y += 82
+
+    y += 42
+    for line in _wrap_lines(draw, theme["support"], support, 820):
+        draw.text((105, y), line, font=support, fill=(174, 193, 208))
+        y += 55
+
+    draw.rounded_rectangle((105, 970, 975, 1135), radius=30, fill=(226, 45, 62))
+    draw.text((190, 1017), "COMENTE QUERO", font=cta, fill=(255, 255, 255))
+    draw.text((105, 1190), "Ragnar One  •  @ragnarplay1  •  ragnarplay.online", font=footer, fill=(174, 193, 208))
+    img.save(path, "PNG", optimize=True)
+    return path
+
+
+def _scheduled_caption(slot):
+    theme = _scheduled_theme(slot)
+    return (
+        theme["headline"] + "\n\n"
+        + theme["support"] + "\n\n"
+        + 'Comente "QUERO" e saiba mais.\n\n'
+        + "#RagnarOne #Streaming #Futebol #FilmesESeries #Entretenimento"
+    )
+
+
+def _publish_scheduled_image(slot):
+    image = _create_scheduled_post_image(slot)
+    image_url = _public_file_url("test-image", image.name)
+    caption = _scheduled_caption(slot)
+    return _publish_image_url_now(image_url, caption, max_wait=120)
+
 def _public_file_signature(kind, filename, expiry):
     payload = f"{kind}|{filename}|{expiry}"
     return hmac.new(_secret(), payload.encode(), hashlib.sha256).hexdigest()
@@ -1230,50 +1334,79 @@ def _schedule_times():
     return times[:10]
 
 
+
 def process_scheduled_posts_once():
     times = _schedule_times()
     if not times:
         return
 
     now = datetime.now(ZoneInfo("America/Sao_Paulo"))
+    due = []
     for hh, mm in times:
         slot = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
-        delta = now - slot
-        # Janela de 15 minutos para disparar o conteúdo aprovado do horário.
-        if delta.total_seconds() < 0 or delta.total_seconds() >= 15 * 60:
-            continue
+        if slot <= now:
+            due.append(slot)
 
-        slot_key = f"schedule_slot_{slot:%Y%m%d_%H%M}"
-        with settings_db() as c:
-            done = c.execute("SELECT value FROM settings WHERE key=?", (slot_key,)).fetchone()
-            if done and done[0]:
-                return
-            row = c.execute(
-                "SELECT cut FROM media WHERE status='queued' ORDER BY created LIMIT 1"
-            ).fetchone()
-
-        if not row:
-            return
-
-        cut = row[0]
-        try:
-            _start_publish(cut)
-            with settings_db() as c:
-                c.execute(
-                    "INSERT INTO settings(key,value,updated) VALUES(?,?,?) "
-                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
-                    (slot_key, cut, time.time()),
-                )
-            print(f"SCHEDULE_POST_STARTED slot={slot:%Y-%m-%d_%H:%M} cut={cut}", flush=True)
-        except Exception as exc:
-            with settings_db() as c:
-                c.execute(
-                    "UPDATE media SET status='publish_failed',error=?,updated=? WHERE cut=?",
-                    (str(exc)[:700], time.time(), cut),
-                )
-            print("SCHEDULE_POST_ERROR " + str(exc), flush=True)
+    if not due:
         return
 
+    # Publica somente o horário mais recente devido. Isso recupera um horário
+    # perdido após reinício sem despejar várias publicações antigas de uma vez.
+    slot = max(due)
+    slot_key = f"schedule_image_done_{slot:%Y%m%d_%H%M}"
+    attempt_key = f"schedule_image_attempt_{slot:%Y%m%d_%H%M}"
+    error_key = f"schedule_image_error_{slot:%Y%m%d_%H%M}"
+
+    with settings_db() as c:
+        done = c.execute("SELECT value FROM settings WHERE key=?", (slot_key,)).fetchone()
+        if done and done[0]:
+            return
+        attempt = c.execute("SELECT value FROM settings WHERE key=?", (attempt_key,)).fetchone()
+
+    # Evita martelar a Meta em caso de erro temporário. Tenta novamente após 10 min.
+    if attempt and attempt[0]:
+        try:
+            if time.time() - float(attempt[0]) < 10 * 60:
+                return
+        except (TypeError, ValueError):
+            pass
+
+    now_ts = time.time()
+    with settings_db() as c:
+        c.execute(
+            "INSERT INTO settings(key,value,updated) VALUES(?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
+            (attempt_key, str(now_ts), now_ts),
+        )
+
+    try:
+        media_id = _publish_scheduled_image(slot)
+        with settings_db() as c:
+            c.execute(
+                "INSERT INTO settings(key,value,updated) VALUES(?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
+                (slot_key, media_id, time.time()),
+            )
+            c.execute(
+                "INSERT INTO settings(key,value,updated) VALUES(?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
+                (error_key, "", time.time()),
+            )
+        print(
+            f"SCHEDULE_IMAGE_SUCCESS slot={slot:%Y-%m-%d_%H:%M} media_id={media_id}",
+            flush=True,
+        )
+    except Exception as exc:
+        with settings_db() as c:
+            c.execute(
+                "INSERT INTO settings(key,value,updated) VALUES(?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
+                (error_key, str(exc)[:1000], time.time()),
+            )
+        print(
+            f"SCHEDULE_IMAGE_ERROR slot={slot:%Y-%m-%d_%H:%M} error={str(exc)[:700]}",
+            flush=True,
+        )
 
 def process_publication_once():
     try:
