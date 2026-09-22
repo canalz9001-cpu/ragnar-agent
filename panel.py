@@ -1,4 +1,5 @@
 """Painel web do Ragnar: configuracao, videos, aprovacao e publicacao."""
+import base64
 import cgi
 import hashlib
 import hmac
@@ -17,7 +18,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageFilter, ImageOps
 import content_intelligence
 
 COOKIE_NAME = "ragnar_panel"
@@ -34,8 +35,10 @@ DEFAULTS = {
         "Não invente informações. Direcione dúvidas comerciais para o site ou WhatsApp."
     ),
     "content_guidance": (
-        "Criar conteúdo visual premium, pouco texto e foco nas dores do cliente: "
-        "travamentos em jogos, delay, filmes e séries travando e suporte que não responde."
+        "Criar conteúdo visual premium, cinematográfico e rico em imagens para a Ragnar One. "
+        "Paleta obrigatória: preto, verde e branco. Sempre usar cenas realistas com pessoas, TV, celular, "
+        "futebol, filmes ou séries. Nunca publicar card simples apenas com texto. "
+        "Foco nas dores: travamentos em jogos, delay, filmes e séries travando e suporte que não responde."
     ),
     "posts_per_day": "3",
     "post_times": "09:00, 12:00, 18:00",
@@ -179,7 +182,7 @@ def _layout(title, content, notice=""):
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{html.escape(title)} · Ragnar One</title>
 <style>
-:root{{--bg:#071018;--card:#101c27;--text:#f4f7fa;--muted:#9fb0bf;--red:#e22d3e;--line:#263746;--green:#20b26b;--amber:#ffbd52}}
+:root{{--bg:#071018;--card:#101c27;--text:#f4f7fa;--muted:#9fb0bf;--red:#19c563;--line:#263746;--green:#20b26b;--amber:#ffbd52}}
 *{{box-sizing:border-box}} body{{margin:0;background:linear-gradient(135deg,#071018,#0a1621 55%,#10161b);color:var(--text);font-family:Inter,Arial,sans-serif}}
 .wrap{{max-width:1180px;margin:auto;padding:24px}} .top{{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:22px}}
 .brand{{font-weight:900;font-size:28px;letter-spacing:.6px}} .brand span{{color:var(--red)}} .muted{{color:var(--muted)}}
@@ -883,73 +886,208 @@ def _wrap_lines(draw, text, font, max_width):
     return lines
 
 
+
 def _scheduled_theme(slot):
     themes = {
         9: {
-            "kicker": "COMECE O DIA SEM TRAVAR",
+            "kicker": "STREAMING ESTÁVEL",
             "headline": "Seu streaming trava justo na hora do jogo?",
-            "support": "Estabilidade e suporte fazem diferença quando cada lance importa.",
+            "support": "Mais estabilidade, conteúdo e suporte para você assistir sem estresse.",
+            "scene": (
+                "A confident adult man relaxing on a modern dark sofa holding a smartphone, "
+                "with a large television behind him showing a generic live football match in a packed stadium. "
+                "Luxury home entertainment room, premium cinematic advertising photography, dark black interior, "
+                "emerald green accent lighting, realistic skin, shallow depth of field, polished commercial look."
+            ),
         },
         12: {
-            "kicker": "ENTRETENIMENTO SEM ESTRESSE",
-            "headline": "Filmes e séries travando acabam com a experiência.",
-            "support": "Tenha uma experiência mais estável para assistir quando quiser.",
+            "kicker": "ENTRETENIMENTO PREMIUM",
+            "headline": "Chega de travar bem na melhor hora",
+            "support": "Filmes, séries e entretenimento com mais estabilidade e suporte.",
+            "scene": (
+                "A stylish couple relaxing together in a sophisticated dark living room, watching a large smart TV. "
+                "The TV shows a generic cinematic entertainment interface with movie and series thumbnails, while a tablet "
+                "and smartphone are visible nearby. Premium streaming advertisement photography, black environment, "
+                "emerald green accent lights, realistic, elegant, high-end, cinematic."
+            ),
         },
         18: {
-            "kicker": "HOJE TEM JOGO?",
-            "headline": "Não deixe o travamento decidir o melhor momento da partida.",
-            "support": "Ragnar One: estabilidade, conteúdo e suporte para você aproveitar.",
+            "kicker": "HOJE É DIA DE JOGO",
+            "headline": "Não deixe o travamento estragar o melhor lance",
+            "support": "Ragnar One: mais estabilidade e suporte para curtir cada momento.",
+            "scene": (
+                "An exciting evening football watch party in a premium modern living room, one adult viewer in foreground "
+                "holding a smartphone while a large TV displays a generic football match under stadium lights. "
+                "Cinematic sports advertising photography, black and emerald green color palette, dramatic green rim light, "
+                "luxury streaming setup, realistic, energetic, polished commercial image."
+            ),
         },
     }
     return themes.get(slot.hour, themes[18])
 
 
+def _generate_premium_scene(slot, theme):
+    key = env("OPENAI_API_KEY")
+    if not key:
+        raise RuntimeError("OPENAI_API_KEY não configurada para gerar o criativo premium.")
+
+    folder = data_root() / "test-posts"
+    folder.mkdir(parents=True, exist_ok=True)
+    raw_path = folder / f"ragnar-scene-green-v3-{slot:%Y%m%d-%H%M}.png"
+    if raw_path.exists() and raw_path.stat().st_size > 100000:
+        return raw_path
+
+    prompt = (
+        "Create a premium vertical social media advertising photograph for a streaming brand. "
+        "NO TEXT, NO LETTERS, NO LOGOS, NO WATERMARKS, NO UI WORDS. "
+        "The final design will add typography later. Keep important faces and TV content away from the bottom 32 percent "
+        "because that area will hold typography and a call-to-action. Use a high-end cinematic commercial aesthetic. "
+        "Brand colors are BLACK, EMERALD GREEN and WHITE only; do not use red as an accent. "
+        "Show rich visual storytelling with real people and devices; avoid a plain background or poster-like text card. "
+        + theme["scene"]
+    )
+    payload = {
+        "model": env("OPENAI_IMAGE_MODEL") or "gpt-image-2.5-sunburst",
+        "prompt": prompt,
+        "size": "1024x1536",
+        "quality": env("OPENAI_IMAGE_QUALITY") or "medium",
+    }
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/images/generations",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": "Bearer " + key,
+            "Content-Type": "application/json",
+            "User-Agent": "RagnarAgent/3.0",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=180) as response:
+            result = json.load(response)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")
+        raise RuntimeError(f"OpenAI Image HTTP {exc.code}: {detail[:700]}")
+
+    data = result.get("data") or []
+    encoded = data[0].get("b64_json") if data and isinstance(data[0], dict) else None
+    if not encoded:
+        raise RuntimeError("A IA não retornou os dados da imagem premium.")
+
+    try:
+        raw = base64.b64decode(encoded)
+    except Exception as exc:
+        raise RuntimeError("Falha ao decodificar a imagem premium.") from exc
+    if len(raw) < 100000:
+        raise RuntimeError("Imagem premium retornada é pequena ou inválida.")
+    raw_path.write_bytes(raw)
+    return raw_path
+
+
+def _draw_centered(draw, box, text, font, fill):
+    bbox = draw.textbbox((0, 0), text, font=font)
+    width = bbox[2] - bbox[0]
+    x = box[0] + (box[2] - box[0] - width) / 2
+    draw.text((x, box[1]), text, font=font, fill=fill)
+
+
 def _create_scheduled_post_image(slot):
     folder = data_root() / "test-posts"
     folder.mkdir(parents=True, exist_ok=True)
-    path = folder / f"ragnar-auto-{slot:%Y%m%d-%H%M}.png"
-    if path.exists() and path.is_file():
+    path = folder / f"ragnar-premium-green-v3-{slot:%Y%m%d-%H%M}.png"
+    if path.exists() and path.is_file() and path.stat().st_size > 150000:
         return path
 
     theme = _scheduled_theme(slot)
-    img = Image.new("RGB", (1080, 1350), (6, 13, 20))
+    source = _generate_premium_scene(slot, theme)
+
+    try:
+        src = Image.open(source).convert("RGB")
+    except Exception as exc:
+        raise RuntimeError("A cena premium gerada não pôde ser aberta.") from exc
+
+    # Formato 4:5 do Instagram, preservando a fotografia gerada.
+    img = ImageOps.fit(src, (1080, 1350), method=Image.Resampling.LANCZOS, centering=(0.5, 0.46))
+    img = ImageEnhance.Contrast(img).enhance(1.06)
+    img = ImageEnhance.Color(img).enhance(0.95)
+
+    # Overlay escuro inferior para manter a imagem visível e garantir leitura perfeita.
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+    for y in range(500, 1350):
+        alpha = int(min(222, max(0, (y - 500) / 850 * 222)))
+        od.rectangle((0, y, 1080, y + 1), fill=(2, 8, 5, alpha))
+    od.rectangle((0, 0, 1080, 180), fill=(0, 0, 0, 108))
+    img = Image.alpha_composite(img.convert("RGBA"), overlay)
+
     draw = ImageDraw.Draw(img)
     font_bold = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
     font_regular = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    brand = ImageFont.truetype(font_bold, 82)
-    kicker = ImageFont.truetype(font_bold, 31)
-    headline = ImageFont.truetype(font_bold, 64)
-    support = ImageFont.truetype(font_regular, 36)
-    cta = ImageFont.truetype(font_bold, 54)
-    footer = ImageFont.truetype(font_regular, 28)
+    brand = ImageFont.truetype(font_bold, 76)
+    brand_one = ImageFont.truetype(font_bold, 76)
+    kicker = ImageFont.truetype(font_bold, 29)
+    headline = ImageFont.truetype(font_bold, 58)
+    support = ImageFont.truetype(font_regular, 31)
+    cta = ImageFont.truetype(font_bold, 49)
+    footer = ImageFont.truetype(font_regular, 25)
 
-    # Fundo com profundidade, mantendo visual premium e limpo.
-    for y in range(1350):
-        shade = int(6 + (y / 1350) * 11)
-        draw.line((0, y, 1080, y), fill=(shade, shade + 7, shade + 13))
-    draw.ellipse((650, -170, 1250, 430), fill=(32, 16, 23))
-    draw.ellipse((-260, 850, 380, 1490), fill=(11, 27, 38))
+    GREEN = (25, 197, 99, 255)
+    GREEN_DARK = (10, 92, 52, 235)
+    WHITE = (248, 250, 249, 255)
+    MUTED = (204, 218, 210, 255)
+    BLACK = (3, 10, 7, 238)
 
-    draw.rounded_rectangle((62, 62, 1018, 1288), radius=48, fill=(9, 19, 28), outline=(226, 45, 62), width=6)
-    draw.text((105, 125), "RAGNAR", font=brand, fill=(245, 247, 250))
-    draw.text((600, 125), "ONE", font=brand, fill=(226, 45, 62))
-    draw.rounded_rectangle((105, 270, 635, 332), radius=25, fill=(226, 45, 62))
-    draw.text((132, 282), theme["kicker"], font=kicker, fill=(255, 255, 255))
+    # Marca no topo.
+    draw.rounded_rectangle((58, 45, 1022, 170), radius=28, fill=(0, 0, 0, 145))
+    draw.text((92, 66), "RAGNAR", font=brand, fill=WHITE)
+    draw.text((522, 66), "ONE", font=brand_one, fill=GREEN)
+    draw.rounded_rectangle((818, 72, 982, 142), radius=22, fill=GREEN_DARK)
+    _draw_centered(draw, (818, 86, 982, 142), "PREMIUM", ImageFont.truetype(font_bold, 22), WHITE)
 
-    y = 415
-    for line in _wrap_lines(draw, theme["headline"], headline, 820):
-        draw.text((105, y), line, font=headline, fill=(245, 247, 250))
-        y += 82
+    # Badge.
+    badge_y = 622
+    draw.rounded_rectangle((74, badge_y, 560, badge_y + 68), radius=32, fill=BLACK, outline=GREEN, width=4)
+    draw.ellipse((101, badge_y + 20, 127, badge_y + 46), fill=GREEN)
+    draw.text((148, badge_y + 17), theme["kicker"], font=kicker, fill=WHITE)
 
-    y += 42
-    for line in _wrap_lines(draw, theme["support"], support, 820):
-        draw.text((105, y), line, font=support, fill=(174, 193, 208))
-        y += 55
+    # Headline com verde em destaque.
+    y = 728
+    for idx, line in enumerate(_wrap_lines(draw, theme["headline"], headline, 900)):
+        fill = GREEN if idx == 1 or (idx == 0 and len(_wrap_lines(draw, theme["headline"], headline, 900)) == 1) else WHITE
+        draw.text((74, y), line, font=headline, fill=fill, stroke_width=2, stroke_fill=(0, 0, 0, 150))
+        y += 72
 
-    draw.rounded_rectangle((105, 970, 975, 1135), radius=30, fill=(226, 45, 62))
-    draw.text((190, 1017), "COMENTE QUERO", font=cta, fill=(255, 255, 255))
-    draw.text((105, 1190), "Ragnar One  •  @ragnarplay1  •  ragnarplay.online", font=footer, fill=(174, 193, 208))
+    y += 18
+    for line in _wrap_lines(draw, theme["support"], support, 900):
+        draw.text((76, y), line, font=support, fill=MUTED)
+        y += 43
+
+    # Benefícios visuais.
+    feature_y = 1040
+    features = [("TV", "JOGOS"), ("▶", "FILMES"), ("◎", "SÉRIES"), ("✓", "SUPORTE")]
+    x_positions = [82, 330, 572, 806]
+    small_bold = ImageFont.truetype(font_bold, 24)
+    for (icon, label), x in zip(features, x_positions):
+        draw.rounded_rectangle((x, feature_y, x + 64, feature_y + 64), radius=16, fill=(7, 35, 22, 220), outline=GREEN, width=3)
+        _draw_centered(draw, (x, feature_y + 16, x + 64, feature_y + 64), icon, ImageFont.truetype(font_bold, 22), GREEN)
+        draw.text((x + 76, feature_y + 18), label, font=small_bold, fill=WHITE)
+
+    # CTA.
+    cta_box = (76, 1148, 1004, 1265)
+    draw.rounded_rectangle(cta_box, radius=50, fill=GREEN, outline=(106, 255, 169, 255), width=3)
+    _draw_centered(draw, (cta_box[0], cta_box[1] + 28, cta_box[2], cta_box[3]), "COMENTE QUERO", cta, WHITE)
+
+    draw.text((76, 1300), "@ragnarplay1   •   ragnarplay.online", font=footer, fill=WHITE)
+
+    # Regra mínima de qualidade: nunca publicar um arquivo vazio/pequeno.
+    img = img.convert("RGB")
     img.save(path, "PNG", optimize=True)
+    if not path.exists() or path.stat().st_size < 150000:
+        try:
+            path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise RuntimeError("Criativo premium não passou na validação de qualidade.")
     return path
 
 
@@ -959,12 +1097,15 @@ def _scheduled_caption(slot):
         theme["headline"] + "\n\n"
         + theme["support"] + "\n\n"
         + 'Comente "QUERO" e saiba mais.\n\n'
-        + "#RagnarOne #Streaming #Futebol #FilmesESeries #Entretenimento"
+        + "#RagnarOne #Streaming #FutebolAoVivo #FilmesESeries #Entretenimento"
     )
 
 
 def _publish_scheduled_image(slot):
+    # Regra: sem imagem premium válida, não existe publicação.
     image = _create_scheduled_post_image(slot)
+    if not image.exists() or image.stat().st_size < 150000:
+        raise RuntimeError("Publicação bloqueada: criativo premium ausente ou inválido.")
     image_url = _public_file_url("test-image", image.name)
     caption = _scheduled_caption(slot)
     return _publish_image_url_now(image_url, caption, max_wait=120)
