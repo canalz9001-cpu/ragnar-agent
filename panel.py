@@ -18,6 +18,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
+import content_intelligence
 
 COOKIE_NAME = "ragnar_panel"
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".m4v"}
@@ -960,10 +961,14 @@ def _start_publish(cut):
         ).fetchone()
     if not row:
         raise RuntimeError("Corte não encontrado.")
+    base_caption = get_setting("reel_caption", DEFAULTS["reel_caption"])
+    caption = content_intelligence.optimized_caption(
+        settings_db, _graph_request, account, base_caption
+    )
     body = {
         "media_type": "REELS",
         "video_url": _public_url(cut),
-        "caption": get_setting("reel_caption", DEFAULTS["reel_caption"]),
+        "caption": caption,
         "share_to_feed": "true",
     }
     result = _graph_request(f"{account}/media", "POST", body)

@@ -12,10 +12,17 @@ Primeira versão executável do atendimento inicial da Ragnar One.
 - Saudação a DM de texto recebida, limitada a uma por usuário por dia.
 - SQLite em volume persistente, deduplicação, fila, limite diário e pausa geral.
 - Envios com resultado incerto não são repetidos automaticamente.
+- Antes de publicar cada Reel aprovado, pesquisa tendências públicas recentes, compara
+  com o desempenho das próprias publicações e otimiza a legenda sem copiar terceiros.
+- A pesquisa é atualizada uma vez ao dia e a leitura de desempenho é armazenada por
+  seis horas, reduzindo custo e chamadas desnecessárias.
 
 ## Ainda não implementado
 
-Conversação livre com OpenAI, classificação de leads, painel, encaminhamento humano automático, pesquisa, geração de imagens e publicação de conteúdo. O manual descreve também essas etapas futuras; não são recursos ativos deste código. O cliente pode contatar a equipe pelo link do WhatsApp.
+Conversação livre com OpenAI, classificação de leads, encaminhamento humano automático
+e geração autônoma de vídeos. O Ragnar melhora a legenda de vídeos aprovados e agenda a
+publicação, mas não fabrica novos vídeos sozinho. O cliente pode contatar a equipe pelo
+link do WhatsApp.
 
 ## Implantação no Railway
 
