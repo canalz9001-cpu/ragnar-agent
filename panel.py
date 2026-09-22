@@ -1482,9 +1482,13 @@ def _nexus_config():
         "api/agent-config/ragnar-one"
     )
     try:
+        headers = {"Accept": "application/json", "User-Agent": "RagnarAgent-Nexus/1.0"}
+        token = env("NEXUS_AGENT_TOKEN")
+        if token:
+            headers["Authorization"] = "Bearer " + token
         req = urllib.request.Request(
             url,
-            headers={"Accept": "application/json", "User-Agent": "RagnarAgent-Nexus/1.0"},
+            headers=headers,
         )
         with urllib.request.urlopen(req, timeout=8) as response:
             payload = json.load(response)
