@@ -1379,6 +1379,7 @@ def process_scheduled_posts_once():
             (attempt_key, str(now_ts), now_ts),
         )
 
+    print(f"SCHEDULE_IMAGE_ATTEMPT slot={slot:%Y-%m-%d_%H:%M}", flush=True)
     try:
         media_id = _publish_scheduled_image(slot)
         with settings_db() as c:
