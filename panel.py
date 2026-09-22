@@ -1298,42 +1298,27 @@ def process_test_post_once():
         print("TEST_POST_ERROR " + str(exc), flush=True)
 
 
+
 def _schedule_times():
-    # Migração da agenda definida pelo Global Play em 21/09/2026.
-    # Atualiza uma única vez também instalações que já tenham horários antigos
-    # persistidos no volume do Railway.
-    policy_version = "2026-09-21_09-12-18"
-    desired_times = DEFAULTS["post_times"]
+    # Política fixa do Ragnar One: três publicações diárias no horário de São Paulo.
+    # Não depende de valores antigos persistidos no volume do Railway.
+    desired_times = "09:00, 12:00, 18:00"
     try:
+        now = time.time()
         with settings_db() as c:
-            marker = c.execute(
-                "SELECT value FROM settings WHERE key='schedule_policy_version'"
-            ).fetchone()
-            if not marker or marker[0] != policy_version:
-                now = time.time()
-                c.execute(
-                    "INSERT INTO settings(key,value,updated) VALUES('post_times',?,?) "
-                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
-                    (desired_times, now),
-                )
-                c.execute(
-                    "INSERT INTO settings(key,value,updated) VALUES('schedule_policy_version',?,?) "
-                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
-                    (policy_version, now),
-                )
+            c.execute(
+                "INSERT INTO settings(key,value,updated) VALUES('post_times',?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
+                (desired_times, now),
+            )
+            c.execute(
+                "INSERT INTO settings(key,value,updated) VALUES('schedule_policy_version',?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
+                ("2026-09-22_fixed_09-12-18", now),
+            )
     except sqlite3.Error:
         pass
-    raw = get_setting("post_times", DEFAULTS["post_times"]) or ""
-    times = []
-    for part in raw.split(","):
-        part = part.strip()
-        if re.fullmatch(r"\d{2}:\d{2}", part):
-            hh, mm = map(int, part.split(":"))
-            if 0 <= hh <= 23 and 0 <= mm <= 59:
-                times.append((hh, mm))
-    return times[:10]
-
-
+    return [(9, 0), (12, 0), (18, 0)]
 
 def process_scheduled_posts_once():
     times = _schedule_times()
