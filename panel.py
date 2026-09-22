@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import html
 import json
+import logging
 import mimetypes
 import os
 import re
@@ -20,6 +21,8 @@ import urllib.request
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageFilter, ImageOps
 import content_intelligence
+
+LOG = logging.getLogger("ragnar.panel")
 
 COOKIE_NAME = "ragnar_panel"
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".m4v"}
