@@ -324,36 +324,59 @@ def process_one():
 
 
 _stop = threading.Event()
-_worker_thread = None
+_worker_threads = {}
 _worker_lock = threading.Lock()
 
 
-def worker():
+def message_worker():
     while not _stop.wait(1):
         try:
             process_one()
-            panel.process_manual_image_post_once()
-            panel.process_scheduled_posts_once()
-            panel.process_test_post_once()
-            panel.process_publication_once()
         except Exception:
-            LOG.exception("worker_iteration_failed")
+            LOG.exception("message_worker_iteration_failed")
+
+
+def posting_worker():
+    print("POSTING_WORKER_LOOP_STARTED", flush=True)
+    while not _stop.wait(2):
+        tasks = (
+            ("manual", panel.process_manual_image_post_once),
+            ("scheduled", panel.process_scheduled_posts_once),
+            ("test", panel.process_test_post_once),
+            ("publication", panel.process_publication_once),
+        )
+        for name, task in tasks:
+            try:
+                task()
+            except Exception:
+                LOG.exception("posting_worker_task_failed task=%s", name)
 
 
 def start_worker():
-    global _worker_thread
+    global _worker_threads
     with _worker_lock:
-        if _worker_thread is not None and _worker_thread.is_alive():
-            return
-        with db() as c:
-            c.execute(
-                "UPDATE jobs SET status='uncertain',error='restart_during_send' WHERE status='sending'"
+        alive = {name: thread for name, thread in _worker_threads.items() if thread.is_alive()}
+        _worker_threads = alive
+
+        if "message" not in _worker_threads:
+            with db() as c:
+                c.execute(
+                    "UPDATE jobs SET status='uncertain',error='restart_during_send' WHERE status='sending'"
+                )
+            thread = threading.Thread(
+                target=message_worker, daemon=True, name="ragnar-message-worker"
             )
-        _worker_thread = threading.Thread(
-            target=worker, daemon=True, name="ragnar-background-worker"
-        )
-        _worker_thread.start()
-        print("BACKGROUND_WORKER_STARTED ODIN_ENABLED=" + str(odin.enabled()), flush=True)
+            thread.start()
+            _worker_threads["message"] = thread
+            print("MESSAGE_WORKER_STARTED ODIN_ENABLED=" + str(odin.enabled()), flush=True)
+
+        if "posting" not in _worker_threads:
+            thread = threading.Thread(
+                target=posting_worker, daemon=True, name="ragnar-posting-worker"
+            )
+            thread.start()
+            _worker_threads["posting"] = thread
+            print("POSTING_WORKER_STARTED", flush=True)
 
 
 start_worker()
