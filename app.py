@@ -338,6 +338,24 @@ def message_worker():
 
 def posting_worker():
     print("POSTING_WORKER_LOOP_STARTED", flush=True)
+    try:
+        local_now = panel.datetime.now(panel.ZoneInfo("America/Sao_Paulo"))
+        schedule = panel._schedule_times()
+        print(
+            "POSTING_SCHEDULE_DIAG local="
+            + local_now.strftime("%Y-%m-%d %H:%M:%S")
+            + " times="
+            + ",".join(f"{h:02d}:{m:02d}" for h, m in schedule),
+            flush=True,
+        )
+    except Exception as exc:
+        print(
+            "POSTING_SCHEDULE_DIAG_ERROR type="
+            + type(exc).__name__
+            + " error="
+            + str(exc)[:700],
+            flush=True,
+        )
     while not _stop.wait(2):
         tasks = (
             ("manual", panel.process_manual_image_post_once),
