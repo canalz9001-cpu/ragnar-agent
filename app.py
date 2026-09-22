@@ -348,7 +348,13 @@ def posting_worker():
         for name, task in tasks:
             try:
                 task()
-            except Exception:
+            except Exception as exc:
+                print(
+                    "POSTING_WORKER_ERROR task=" + name
+                    + " type=" + type(exc).__name__
+                    + " error=" + str(exc)[:700],
+                    flush=True,
+                )
                 LOG.exception("posting_worker_task_failed task=%s", name)
 
 
