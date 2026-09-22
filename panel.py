@@ -1770,6 +1770,20 @@ def handle_test_trigger(environ, start_response):
         )
 
 
+def _friendly_agent_error(message):
+    text = str(message or "")
+    low = text.lower()
+    if "invalid_api_key" in low or ("openai" in low and "401" in low):
+        return "OpenAI: chave inválida. Reconecte em Conexões."
+    if "openai_not_connected" in low or "openai não conectada" in low:
+        return "OpenAI: conexão pendente no NEXUS."
+    if "429" in low or "rate_limit" in low or "insufficient_quota" in low:
+        return "OpenAI: limite ou saldo indisponível."
+    if "instagram" in low or "meta" in low:
+        return "Instagram/Meta: falha na publicação. Verifique a conexão."
+    return text[:180] if text else ""
+
+
 def _scheduled_status_summary():
     latest_done = None
     latest_error = None
@@ -1797,7 +1811,7 @@ def _scheduled_status_summary():
                 }
             elif key.startswith("schedule_image_error_") and value and latest_error is None:
                 latest_error = {
-                    "message": str(value)[:500],
+                    "message": _friendly_agent_error(value),
                     "updated_at": float(updated or 0),
                 }
             if latest_done is not None and latest_error is not None:
