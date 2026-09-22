@@ -1641,8 +1641,13 @@ def process_scheduled_posts_once():
     if done and done[0]:
         return
 
-    # Evita martelar a Meta em caso de erro temporário. Tenta novamente após 10 min.
-    if attempt_age is not None and attempt_age < 10 * 60:
+    # Evita martelar a Meta em caso de erro temporário.
+    # O intervalo pode ser reduzido temporariamente via Railway para diagnóstico.
+    try:
+        retry_seconds = max(30, int(env("SCHEDULE_RETRY_SECONDS") or "600"))
+    except ValueError:
+        retry_seconds = 600
+    if attempt_age is not None and attempt_age < retry_seconds:
         return
 
     now_ts = time.time()
