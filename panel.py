@@ -986,7 +986,7 @@ def _generate_premium_scene(slot, theme):
         + theme["scene"]
     )
     payload = {
-        "model": env("OPENAI_IMAGE_MODEL") or "gpt-image-2.5-sunburst",
+        "model": env("OPENAI_IMAGE_MODEL") or "gpt-image-2",
         "prompt": prompt,
         "size": "1024x1536",
         "quality": env("OPENAI_IMAGE_QUALITY") or "medium",
