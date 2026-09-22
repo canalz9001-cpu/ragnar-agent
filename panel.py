@@ -1717,15 +1717,59 @@ def handle_test_trigger(environ, start_response):
         )
 
 
+def _scheduled_status_summary():
+    latest_done = None
+    latest_error = None
+    try:
+        with settings_db() as db:
+            rows = db.execute(
+                "SELECT key,value,updated FROM settings "
+                "WHERE key LIKE 'schedule_image_done_%' OR key LIKE 'schedule_image_error_%' "
+                "ORDER BY updated DESC LIMIT 80"
+            ).fetchall()
+        for key, value, updated in rows:
+            if key.startswith("schedule_image_done_") and value and latest_done is None:
+                suffix = key.replace("schedule_image_done_", "", 1)
+                display = suffix
+                try:
+                    dt = datetime.strptime(suffix, "%Y%m%d_%H%M").replace(tzinfo=ZoneInfo("America/Sao_Paulo"))
+                    display = dt.strftime("%d/%m %H:%M")
+                except ValueError:
+                    pass
+                latest_done = {
+                    "slot": suffix,
+                    "time": display,
+                    "media_id": str(value),
+                    "updated_at": float(updated or 0),
+                }
+            elif key.startswith("schedule_image_error_") and value and latest_error is None:
+                latest_error = {
+                    "message": str(value)[:500],
+                    "updated_at": float(updated or 0),
+                }
+            if latest_done is not None and latest_error is not None:
+                break
+    except sqlite3.Error:
+        return {"last_post": None, "last_error": None}
+
+    last_error = None
+    if latest_error and (not latest_done or latest_error["updated_at"] > latest_done["updated_at"]):
+        last_error = latest_error["message"]
+    return {"last_post": latest_done, "last_error": last_error}
+
+
 def nexus_status_snapshot():
     openai = _openai_status()
     railway = _railway_status()
     cfg = _nexus_config()
+    scheduled = _scheduled_status_summary()
     return {
         "agent": "Ragnar",
         "online": True,
         "nexus_connected": bool(cfg),
         "post_times": [f"{h:02d}:{m:02d}" for h, m in _schedule_times()],
+        "last_post": scheduled.get("last_post"),
+        "last_error": scheduled.get("last_error"),
         "openai": {
             "configured": bool(openai.get("configured")),
             "authenticated": openai.get("valid") is True,
