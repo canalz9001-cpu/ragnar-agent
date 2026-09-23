@@ -435,6 +435,13 @@ def application(environ, start_response):
         if not expected or not provided.startswith("Bearer ") or not hmac.compare_digest(provided[7:], expected):
             return reply("401 Unauthorized", {"error": "unauthorized"})
         return reply("200 OK", panel.nexus_status_snapshot())
+    if path == "/nexus/leads" and method == "GET":
+        expected = env("NEXUS_AGENT_TOKEN")
+        provided = environ.get("HTTP_AUTHORIZATION", "")
+        if not expected or not provided.startswith("Bearer ") or not hmac.compare_digest(provided[7:], expected):
+            return reply("401 Unauthorized", {"error": "unauthorized"})
+        with db() as c:
+            return reply("200 OK", odin.nexus_leads_snapshot(c))
     if path == "/media-public":
         return panel.handle_public_media(environ, start_response)
     if path == "/public-file":
