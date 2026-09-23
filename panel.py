@@ -1308,13 +1308,19 @@ def _create_scheduled_post_image(slot):
     draw.text((64, 1306), footer_text, font=footer, fill=(220, 232, 226, 210))
 
     img = img.convert("RGB")
-    img.save(path, "PNG", optimize=True)
-    if not path.exists() or path.stat().st_size < 140000:
+    img.save(path, "PNG", optimize=False, compress_level=4)
+    try:
+        with Image.open(path) as check:
+            check.verify()
+        with Image.open(path) as check:
+            if check.size != (1080, 1350) or check.format != "PNG":
+                raise RuntimeError("dimensao_ou_formato_invalido")
+    except Exception as exc:
         try:
             path.unlink(missing_ok=True)
         except Exception:
             pass
-        raise RuntimeError("Criativo premium não passou na validação de qualidade.")
+        raise RuntimeError("Criativo premium não passou na validação de qualidade.") from exc
     return path
 
 
@@ -1332,10 +1338,18 @@ def _scheduled_caption(slot):
 
 
 def _publish_scheduled_image(slot):
-    # Regra: sem imagem premium válida, não existe publicação.
+    # Regra: publica somente uma imagem 4:5 válida. O tamanho em bytes não é
+    # usado como critério de qualidade porque PNG otimizado pode ficar menor.
     image = _create_scheduled_post_image(slot)
-    if not image.exists() or image.stat().st_size < 150000:
+    if not image.exists():
         raise RuntimeError("Publicação bloqueada: criativo premium ausente ou inválido.")
+    try:
+        with Image.open(image) as check:
+            if check.size != (1080, 1350) or check.format != "PNG":
+                raise RuntimeError("imagem_invalida")
+            check.verify()
+    except Exception as exc:
+        raise RuntimeError("Publicação bloqueada: criativo premium ausente ou inválido.") from exc
     image_url = _public_file_url("test-image", image.name)
     caption = _scheduled_caption(slot)
     return _publish_image_url_now(image_url, caption, max_wait=120)
