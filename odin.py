@@ -350,6 +350,40 @@ def record_outbound(connection, user_id, body):
     )
 
 
+def nexus_leads_snapshot(connection):
+    ensure_schema(connection)
+    rows = connection.execute(
+        """SELECT instagram_user_id,instagram_username,intent,temperature,score,stage,
+                  needs_human,trigger_keyword,last_message,updated
+           FROM odin_leads
+           ORDER BY needs_human DESC,
+                    CASE temperature WHEN 'hot' THEN 3 WHEN 'warm' THEN 2 ELSE 1 END DESC,
+                    score DESC,updated DESC LIMIT 500"""
+    ).fetchall()
+    leads = []
+    summary = {"total": 0, "hot": 0, "warm": 0, "cold": 0, "needsHuman": 0}
+    for row in rows:
+        lead = {
+            "instagramUserId": str(row[0] or ""),
+            "instagramUsername": str(row[1] or ""),
+            "intent": str(row[2] or ""),
+            "temperature": str(row[3] or "cold"),
+            "score": int(row[4] or 0),
+            "stage": str(row[5] or "new"),
+            "needsHuman": bool(row[6]),
+            "triggerKeyword": str(row[7] or ""),
+            "lastMessage": str(row[8] or ""),
+            "updatedAt": float(row[9] or 0),
+        }
+        leads.append(lead)
+        summary["total"] += 1
+        temp = lead["temperature"] if lead["temperature"] in ("hot", "warm", "cold") else "cold"
+        summary[temp] += 1
+        if lead["needsHuman"]:
+            summary["needsHuman"] += 1
+    return {"ok": True, "summary": summary, "leads": leads}
+
+
 def _authorized(environ):
     password = _env("ODIN_ADMIN_PASSWORD") or _env("PANEL_PASSWORD")
     if not password:
