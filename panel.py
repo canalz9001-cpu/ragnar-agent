@@ -1430,6 +1430,7 @@ def _create_scheduled_post_image(slot):
             attempt_path,
             str(theme.get("headline") or ""),
             str(theme.get("support") or ""),
+            str(theme.get("kicker") or ""),
         )
         if qa.get("approved"):
             attempt_path.replace(path)
