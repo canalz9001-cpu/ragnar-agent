@@ -58,6 +58,76 @@ def _normalize(text):
     )
     return re.sub(r"\s+", " ", value).strip()
 
+AUTOMATION_MARKERS = (
+    "sou a assistente virtual",
+    "sou o assistente virtual",
+    "assistente virtual",
+    "atendimento automatico",
+    "atendimento automatizado",
+    "responda 1",
+    "responda 2",
+    "responda 3",
+    "digite 1",
+    "digite 2",
+    "escolha uma opcao",
+    "escolha uma das opcoes",
+    "selecione uma opcao",
+    "para eu te ajudar rapido",
+    "para continuar escolha",
+    "menu de atendimento",
+    "falar no whatsapp",
+    "acesse nosso site",
+)
+
+
+def _loop_text(text):
+    value = _normalize(text)
+    value = re.sub(r"https?://\S+", " ", value)
+    value = re.sub(r"\b\d{2,}\b", "#", value)
+    value = re.sub(r"[^a-z0-9# ]+", " ", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _automation_marker_score(text):
+    value = _loop_text(text)
+    return sum(1 for marker in AUTOMATION_MARKERS if marker in value)
+
+
+def automation_loop_reason(connection, user_id, inbound_text, window_seconds=600):
+    """Detect likely bot-to-bot loops without relying on a provider bot flag.
+
+    Returns a short reason string when the reply should be suppressed, otherwise "".
+    """
+    if not user_id:
+        return ""
+    ensure_schema(connection)
+    cutoff = time.time() - max(60, int(window_seconds))
+    rows = connection.execute(
+        """SELECT direction,body,created
+           FROM odin_messages
+           WHERE instagram_user_id=? AND created>=?
+           ORDER BY created DESC LIMIT 20""",
+        (str(user_id), cutoff),
+    ).fetchall()
+    inbound = [row for row in rows if row[0] == "inbound"]
+    outbound = [row for row in rows if row[0] == "outbound"]
+    normalized = _loop_text(inbound_text)
+    same_inbound = sum(1 for row in inbound if _loop_text(row[1]) == normalized)
+    marker_score = _automation_marker_score(inbound_text)
+
+    if marker_score >= 2 and outbound:
+        return "automation_signature"
+    if same_inbound >= 2 and len(outbound) >= 2:
+        return "repeated_inbound"
+    if len(inbound) >= 5 and len(outbound) >= 5:
+        return "rapid_ping_pong"
+    automated_inbound = sum(1 for row in inbound if _automation_marker_score(row[1]) >= 1)
+    if automated_inbound >= 3 and len(outbound) >= 3:
+        return "automation_burst"
+    return ""
+
+
+
 
 def _classify(text):
     t = _normalize(text)
@@ -192,6 +262,11 @@ def qualification_reply(connection, user_id, username, body, website, whatsapp_u
     lead = capture_lead(connection, user_id, username, body, source="direct")
     if not lead:
         return "Como posso te ajudar?"
+
+    loop_reason = automation_loop_reason(connection, user_id, body)
+    if loop_reason:
+        _set_state(connection, user_id, stage="automation_suppressed")
+        return None
 
     t = _normalize(body)
     intent = lead.get("intent")
