@@ -906,43 +906,56 @@ def _scheduled_theme(slot):
     tone = str(profile.get("tone") or "Firme, direto e profissional")
     avoid = str(profile.get("avoidTopics") or "Promessas irreais e poluição visual")
 
-    # Copy curta e visual. O post precisa parecer campanha, não relatório do agente.
     index = 0
     for i, (hh, mm) in enumerate(_schedule_times()):
         if (hh, mm) == (slot.hour, slot.minute):
             index = i
             break
 
-    variants = {
-        0: [
-            ("DÊ PLAY", "Seu momento começa agora.", "Entretenimento para transformar uma noite comum em sessão especial."),
-            ("NA SUA TELA", "O que vai entrar na sua tela hoje?", "Escolha, descubra e curta seu momento do seu jeito."),
-            ("MODO DIVERSÃO", "Hoje a programação é aproveitar.", "Uma experiência de entretenimento feita para prender sua atenção."),
-        ],
-        1: [
-            ("FILMES & SÉRIES", "Seu sofá virou cinema.", "Prepare a pipoca e escolha a próxima história."),
-            ("MARATONA ATIVADA", "Só falta escolher o próximo episódio.", "Clima de cinema, conforto e entretenimento na sua tela."),
-            ("ESCOLHA A HISTÓRIA", "Filme, série ou maratona?", "Uma noite pode começar com uma simples escolha."),
-        ],
-        2: [
-            ("HOJE TEM JOGO", "Sua tela está pronta?", "Futebol é expectativa, emoção e cada lance vivido junto."),
-            ("CLIMA DE JOGO", "A torcida começa antes do apito.", "Reúna a galera e entre no clima da partida."),
-            ("É DIA DE FUTEBOL", "O próximo lance pode mudar tudo.", "Energia de estádio e emoção para acompanhar cada momento."),
-        ],
+    brand_context = (
+        f"Nicho: {niche}. Público: {audience}. Estratégia: {strategy}. "
+        f"Estilo visual: {style}. Tom: {tone}. Foco: {focus}. "
+        f"Evitar: {avoid}. Brief do horário: {brief}."
+    )
+
+    try:
+        account = env("INSTAGRAM_ACCOUNT_ID")
+        plan = content_intelligence.plan_post(
+            settings_db,
+            _graph_request,
+            account,
+            index,
+            brand_context,
+        )
+    except Exception as exc:
+        LOG.warning("planner_unavailable", exc_info=True)
+        plan = {}
+
+    fallbacks = {
+        0: ("DÊ PLAY", "Seu momento começa agora.", "Entretenimento para transformar uma noite comum em sessão especial.", "momento premium de descoberta e entretenimento"),
+        1: ("FILMES & SÉRIES", "Seu sofá virou cinema.", "Prepare a pipoca e escolha a próxima história.", "noite de cinema em casa, aconchegante e cinematográfica"),
+        2: ("HOJE TEM JOGO", "Sua tela está pronta?", "Futebol é expectativa, emoção e cada lance vivido junto.", "energia de futebol e expectativa positiva antes da partida"),
     }
-    choices = variants.get(min(index, 2), variants[0])
-    kicker, headline, support = choices[slot.timetuple().tm_yday % len(choices)]
+    fk, fh, fs, fscene = fallbacks.get(min(index, 2), fallbacks[0])
+
+    kicker = str(plan.get("kicker") or fk)
+    headline = str(plan.get("headline") or fh)
+    support = str(plan.get("support") or fs)
+    scene_direction = str(plan.get("scene_direction") or fscene)
+    research_summary = str(plan.get("research_summary") or "")
 
     scene = (
         f"Create a premium vertical advertising photograph for the niche {niche}. "
         f"Target audience: {audience}. Creative brief: {brief or focus}. "
         f"Visual style: {style}. Communication tone: {tone}. "
+        f"Current research guidance: {research_summary}. "
+        f"Chosen scene direction: {scene_direction}. "
         f"Avoid: {avoid}. NO text, letters, logos, captions or watermarks inside the generated image. "
-        "ATTENTION-FIRST COMPOSITION: create an upbeat, desirable entertainment moment with a clear focal point in the "
-        "first glance. Prefer cinematic movie-night scenes, football excitement, friends/family enjoying the moment, "
-        "content discovery, premium living-room atmosphere or natural multi-device use. A person may be present when "
-        "it strengthens the concept, but never depict suffering, sadness, anger, despair, frustration, crying, arguing, "
-        "or a split-screen sad-versus-happy before/after. Do not generate generic text cards or empty lifeless scenes. "
+        "ATTENTION-FIRST COMPOSITION: create an upbeat, desirable entertainment moment with a clear focal point "
+        "in the first glance. Prefer cinematic movie-night scenes, football excitement, friends/family enjoying "
+        "the moment, content discovery, premium living-room atmosphere or natural multi-device use. "
+        "Never depict suffering, sadness, anger, despair, frustration, crying, arguing, or a split-screen "
+        "sad-versus-happy before/after. Do not generate generic text cards or empty lifeless scenes. "
         "Use premium cinematic lighting, believable devices, natural anatomy, energy, movement and visual curiosity. "
         "Leave the lower quarter darker for typography."
     )
@@ -954,7 +967,6 @@ def _scheduled_theme(slot):
         "slot_index": index,
         "brief": brief,
     }
-
 
 def _post_ledger_id(slot):
     return f"ragnar-one:{slot:%Y%m%d-%H%M}"
@@ -1036,42 +1048,12 @@ def _image_usage_cost_usd(usage, model):
 
 
 def _nexus_generate_image(payload):
-    token = env("NEXUS_AGENT_TOKEN")
-    if not token:
-        return None
-
-    url = env("NEXUS_OPENAI_IMAGE_URL") or (
-        "https://servidor-global-play-production.up.railway.app/"
-        "api/agent/ragnar-one/openai/images"
-    )
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": "Bearer " + token,
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": "RagnarAgent-Nexus/1.0",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=180) as response:
-            return json.load(response)
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", "replace")
-        if exc.code == 409:
-            return None
-        try:
-            payload_error = json.loads(raw)
-            code = str(payload_error.get("error") or "openai_image_failed")
-        except Exception:
-            code = "openai_image_failed"
-        raise RuntimeError(f"NEXUS OpenAI HTTP {exc.code}: {code}")
-    except Exception:
-        LOG.warning("nexus_openai_proxy_unavailable", exc_info=True)
-        return None
-
+    """
+    Compatibilidade legada. A automação do Ragnar NÃO usa proxy de imagem
+    do servidor Global Play. Toda geração é feita diretamente na OpenAI
+    usando OPENAI_API_KEY deste serviço.
+    """
+    return None
 
 def _generate_local_fallback_scene(slot, primary, secondary, theme=None):
     """
@@ -1213,10 +1195,12 @@ def _generate_local_fallback_scene(slot, primary, secondary, theme=None):
     return path
 
 
-def _generate_premium_scene(slot, theme):
+def _generate_premium_scene(slot, theme, correction=""):
     folder = data_root() / "test-posts"
     folder.mkdir(parents=True, exist_ok=True)
-    raw_path = folder / f"ragnar-scene-premium-v5-{slot:%Y%m%d-%H%M}.png"
+
+    correction_key = hashlib.sha256(str(correction or "").encode("utf-8")).hexdigest()[:8]
+    raw_path = folder / f"ragnar-scene-premium-v6-{slot:%Y%m%d-%H%M}-{correction_key}.png"
     if raw_path.exists() and raw_path.stat().st_size > 100000:
         return raw_path
 
@@ -1238,74 +1222,72 @@ def _generate_premium_scene(slot, theme):
         "Brand colors are accents, not the whole scene. "
         + theme["scene"]
     )
+    if correction:
+        prompt += (
+            " Previous visual quality review requested these corrections: "
+            + str(correction)[:900]
+            + ". Fix them while keeping the background text-free."
+        )
+
+    key = env("OPENAI_API_KEY")
+    if not key:
+        raise RuntimeError("OPENAI_API_KEY do Ragnar não configurada no Railway.")
+
+    # Somente campos aceitos pelo endpoint OpenAI. Nada de IDs internos do NEXUS.
     payload = {
         "model": env("OPENAI_IMAGE_MODEL") or "gpt-image-2",
         "prompt": prompt,
         "size": "1024x1536",
         "quality": env("OPENAI_IMAGE_QUALITY") or "medium",
-        "postId": _post_ledger_id(slot),
-        "scheduledFor": slot.isoformat(),
-        "scheduledHour": slot.strftime("%H:%M"),
     }
-
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/images/generations",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": "Bearer " + key,
+            "Content-Type": "application/json",
+            "User-Agent": "RagnarAgent/4.0",
+        },
+        method="POST",
+    )
     try:
-        result = _nexus_generate_image(payload)
-        if result is None:
-            key = env("OPENAI_API_KEY")
-            if not key:
-                raise RuntimeError("OpenAI não conectada no NEXUS e OPENAI_API_KEY local não configurada.")
-            req = urllib.request.Request(
-                "https://api.openai.com/v1/images/generations",
-                data=json.dumps(payload).encode("utf-8"),
-                headers={
-                    "Authorization": "Bearer " + key,
-                    "Content-Type": "application/json",
-                    "User-Agent": "RagnarAgent/3.0",
-                },
-                method="POST",
+        with urllib.request.urlopen(req, timeout=210) as response:
+            result = json.load(response)
+
+        local_cost = _image_usage_cost_usd(result.get("usage"), payload.get("model"))
+        if local_cost is not None and local_cost > 0:
+            _nexus_post_event(
+                slot,
+                "generating",
+                cost_delta_usd=local_cost,
+                model=payload.get("model") or "",
+                cost_source="openai_usage",
             )
-            try:
-                with urllib.request.urlopen(req, timeout=180) as response:
-                    result = json.load(response)
-                local_cost = _image_usage_cost_usd(result.get("usage"), payload.get("model"))
-                if local_cost is not None and local_cost > 0:
-                    _nexus_post_event(
-                        slot,
-                        "generating",
-                        cost_delta_usd=local_cost,
-                        model=payload.get("model") or "",
-                        cost_source="openai_usage",
-                    )
-            except urllib.error.HTTPError as exc:
-                raw = exc.read().decode("utf-8", "replace")
-                try:
-                    payload_error = json.loads(raw)
-                    code = payload_error.get("error", {}).get("code") or payload_error.get("error", {}).get("type") or "openai_image_failed"
-                except Exception:
-                    code = "openai_image_failed"
-                raise RuntimeError(f"OpenAI Image HTTP {exc.code}: {code}")
 
         encoded = result.get("b64_json")
         if not encoded:
             data = result.get("data") or []
             encoded = data[0].get("b64_json") if data and isinstance(data[0], dict) else None
         if not encoded:
-            raise RuntimeError("A IA não retornou os dados da imagem premium.")
+            raise RuntimeError("A OpenAI não retornou os bytes da imagem.")
 
         raw = base64.b64decode(encoded)
         if len(raw) < 100000:
             raise RuntimeError("Imagem premium retornada é pequena ou inválida.")
         raw_path.write_bytes(raw)
         return raw_path
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", "replace")
+        try:
+            payload_error = json.loads(raw)
+            err = payload_error.get("error", {})
+            code = err.get("code") or err.get("type") or err.get("message") or "openai_image_failed"
+        except Exception:
+            code = raw[:300] or "openai_image_failed"
+        raise RuntimeError(f"OpenAI Image HTTP {exc.code}: {code}")
     except Exception as exc:
-        print(
-            "PREMIUM_CREATIVE_BLOCKED error=" + str(exc)[:300],
-            flush=True,
-        )
-        raise RuntimeError(
-            "Criativo premium bloqueado: a geração por IA falhou. "
-            "Fallback local desativado para impedir postagem de arte fora do padrão aprovado."
-        ) from exc
+        print("PREMIUM_CREATIVE_BLOCKED error=" + str(exc)[:400], flush=True)
+        raise
 
 def _draw_centered(draw, box, text, font, fill):
     bbox = draw.textbbox((0, 0), text, font=font)
@@ -1326,109 +1308,126 @@ def _create_scheduled_post_image(slot):
                 "primary": cfg.get("primaryColor"),
                 "secondary": cfg.get("secondaryColor"),
                 "profile": profile,
-                "renderer": "premium-v5-human-device",
+                "renderer": "premium-v6-claire-pipeline",
             },
             sort_keys=True,
             ensure_ascii=False,
         ).encode("utf-8")
     ).hexdigest()[:10]
-    path = folder / f"ragnar-premium-nexus-{slot:%Y%m%d-%H%M}-{fingerprint}.png"
+    path = folder / f"ragnar-premium-v6-{slot:%Y%m%d-%H%M}-{fingerprint}.png"
     if path.exists() and path.is_file() and path.stat().st_size > 150000:
         return path
 
     theme = _scheduled_theme(slot)
-    source = _generate_premium_scene(slot, theme)
+    correction = ""
+    last_issues = []
 
-    try:
-        src = Image.open(source).convert("RGB")
-    except Exception as exc:
-        raise RuntimeError("A cena premium gerada não pôde ser aberta.") from exc
+    for attempt in range(1, 4):
+        source = _generate_premium_scene(slot, theme, correction=correction)
 
-    # Formato 4:5 do Instagram. A cena ocupa o post; a tipografia apenas complementa.
-    img = ImageOps.fit(src, (1080, 1350), method=Image.Resampling.LANCZOS, centering=(0.5, 0.46))
-    img = ImageEnhance.Contrast(img).enhance(1.08)
-    img = ImageEnhance.Color(img).enhance(1.04)
-
-    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    od = ImageDraw.Draw(overlay)
-    # Vinheta superior leve e gradiente inferior para leitura, sem esconder a cena.
-    for y in range(0, 250):
-        alpha = int(95 * (1 - y / 250))
-        od.rectangle((0, y, 1080, y + 1), fill=(0, 0, 0, alpha))
-    for y in range(610, 1350):
-        alpha = int(min(230, max(0, (y - 610) / 740 * 230)))
-        od.rectangle((0, y, 1080, y + 1), fill=(2, 6, 5, alpha))
-    img = Image.alpha_composite(img.convert("RGBA"), overlay)
-
-    draw = ImageDraw.Draw(img)
-    font_bold = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-    font_regular = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    brand = ImageFont.truetype(font_bold, 54)
-    kicker_font = ImageFont.truetype(font_bold, 24)
-    headline = ImageFont.truetype(font_bold, 62)
-    support = ImageFont.truetype(font_regular, 29)
-    cta = ImageFont.truetype(font_bold, 38)
-    footer = ImageFont.truetype(font_regular, 20)
-
-    primary_rgb, secondary_rgb = _live_brand_colors()
-    GREEN = (*primary_rgb, 255)
-    WHITE = (248, 251, 249, 255)
-    MUTED = (210, 222, 216, 255)
-
-    # Marca limpa: sem tarja gigante.
-    draw.text((62, 48), "RAGNAR", font=brand, fill=WHITE, stroke_width=2, stroke_fill=(0,0,0,130))
-    draw.text((300, 48), "ONE", font=brand, fill=GREEN, stroke_width=2, stroke_fill=(0,0,0,130))
-
-    # Kicker pequeno.
-    kicker_text = str(theme.get("kicker") or "RAGNAR ONE").upper()
-    kicker_w = draw.textbbox((0,0), kicker_text, font=kicker_font)[2]
-    pill = (62, 785, min(1010, 112 + kicker_w), 838)
-    draw.rounded_rectangle(pill, radius=24, fill=(4, 14, 10, 188), outline=GREEN, width=2)
-    draw.text((84, 800), kicker_text, font=kicker_font, fill=WHITE)
-
-    # Headline forte, no máximo 2-3 linhas.
-    y = 868
-    lines = _wrap_lines(draw, theme["headline"], headline, 920)[:3]
-    for line in lines:
-        draw.text((62, y), line, font=headline, fill=WHITE, stroke_width=2, stroke_fill=(0,0,0,150))
-        y += 72
-
-    # Apoio curto.
-    y += 10
-    for line in _wrap_lines(draw, theme["support"], support, 900)[:2]:
-        draw.text((64, y), line, font=support, fill=MUTED, stroke_width=1, stroke_fill=(0,0,0,110))
-        y += 42
-
-    # CTA elegante, sem ocupar metade do criativo.
-    profile = _posting_profile()
-    cta_text = str(profile.get("cta") or 'Comente "QUERO" e saiba mais')
-    short_cta = cta_text.replace('"', "").upper()
-    if len(short_cta) > 34:
-        short_cta = "COMENTE QUERO E SAIBA MAIS"
-    cta_box = (62, 1182, 1018, 1280)
-    draw.rounded_rectangle(cta_box, radius=32, fill=GREEN)
-    _draw_centered(draw, (cta_box[0], cta_box[1] + 24, cta_box[2], cta_box[3]), short_cta, cta, WHITE)
-
-    cfg = _nexus_config()
-    footer_text = str(cfg.get("instagram") or "@ragnarplay1")
-    draw.text((64, 1306), footer_text, font=footer, fill=(220, 232, 226, 210))
-
-    img = img.convert("RGB")
-    img.save(path, "PNG", optimize=False, compress_level=4)
-    try:
-        with Image.open(path) as check:
-            check.verify()
-        with Image.open(path) as check:
-            if check.size != (1080, 1350) or check.format != "PNG":
-                raise RuntimeError("dimensao_ou_formato_invalido")
-    except Exception as exc:
         try:
-            path.unlink(missing_ok=True)
-        except Exception:
-            pass
-        raise RuntimeError("Criativo premium não passou na validação de qualidade.") from exc
-    return path
+            src = Image.open(source).convert("RGB")
+        except Exception as exc:
+            raise RuntimeError("A cena premium gerada não pôde ser aberta.") from exc
 
+        img = ImageOps.fit(src, (1080, 1350), method=Image.Resampling.LANCZOS, centering=(0.5, 0.46))
+        img = ImageEnhance.Contrast(img).enhance(1.08)
+        img = ImageEnhance.Color(img).enhance(1.04)
+
+        overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        od = ImageDraw.Draw(overlay)
+        for y in range(0, 250):
+            alpha = int(95 * (1 - y / 250))
+            od.rectangle((0, y, 1080, y + 1), fill=(0, 0, 0, alpha))
+        for y in range(610, 1350):
+            alpha = int(min(230, max(0, (y - 610) / 740 * 230)))
+            od.rectangle((0, y, 1080, y + 1), fill=(2, 6, 5, alpha))
+        img = Image.alpha_composite(img.convert("RGBA"), overlay)
+
+        draw = ImageDraw.Draw(img)
+        font_bold = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        font_regular = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+        brand = ImageFont.truetype(font_bold, 54)
+        kicker_font = ImageFont.truetype(font_bold, 24)
+        headline = ImageFont.truetype(font_bold, 62)
+        support = ImageFont.truetype(font_regular, 29)
+        cta = ImageFont.truetype(font_bold, 38)
+        footer = ImageFont.truetype(font_regular, 20)
+
+        primary_rgb, secondary_rgb = _live_brand_colors()
+        GREEN = (*primary_rgb, 255)
+        WHITE = (248, 251, 249, 255)
+        MUTED = (210, 222, 216, 255)
+
+        draw.text((62, 48), "RAGNAR", font=brand, fill=WHITE, stroke_width=2, stroke_fill=(0,0,0,130))
+        draw.text((300, 48), "ONE", font=brand, fill=GREEN, stroke_width=2, stroke_fill=(0,0,0,130))
+
+        kicker_text = str(theme.get("kicker") or "RAGNAR ONE").upper()
+        kicker_w = draw.textbbox((0,0), kicker_text, font=kicker_font)[2]
+        pill = (62, 785, min(1010, 112 + kicker_w), 838)
+        draw.rounded_rectangle(pill, radius=24, fill=(4, 14, 10, 188), outline=GREEN, width=2)
+        draw.text((84, 800), kicker_text, font=kicker_font, fill=WHITE)
+
+        y = 868
+        lines = _wrap_lines(draw, theme["headline"], headline, 920)[:3]
+        for line in lines:
+            draw.text((62, y), line, font=headline, fill=WHITE, stroke_width=2, stroke_fill=(0,0,0,150))
+            y += 72
+
+        y += 10
+        for line in _wrap_lines(draw, theme["support"], support, 900)[:2]:
+            draw.text((64, y), line, font=support, fill=MUTED, stroke_width=1, stroke_fill=(0,0,0,110))
+            y += 42
+
+        profile = _posting_profile()
+        cta_text = str(profile.get("cta") or 'Comente "QUERO" e saiba mais')
+        short_cta = cta_text.replace('"', "").upper()
+        if len(short_cta) > 34:
+            short_cta = "COMENTE QUERO E SAIBA MAIS"
+        cta_box = (62, 1182, 1018, 1280)
+        draw.rounded_rectangle(cta_box, radius=32, fill=GREEN)
+        _draw_centered(draw, (cta_box[0], cta_box[1] + 24, cta_box[2], cta_box[3]), short_cta, cta, WHITE)
+
+        footer_text = str(cfg.get("instagram") or "@ragnarplay1")
+        draw.text((64, 1306), footer_text, font=footer, fill=(220, 232, 226, 210))
+
+        attempt_path = folder / f".qa-ragnar-{slot:%Y%m%d-%H%M}-{attempt}.png"
+        img.convert("RGB").save(attempt_path, "PNG", optimize=False, compress_level=4)
+        try:
+            with Image.open(attempt_path) as check:
+                check.verify()
+            with Image.open(attempt_path) as check:
+                if check.size != (1080, 1350) or check.format != "PNG":
+                    raise RuntimeError("dimensao_ou_formato_invalido")
+        except Exception as exc:
+            attempt_path.unlink(missing_ok=True)
+            raise RuntimeError("Criativo premium não passou na validação estrutural.") from exc
+
+        qa = content_intelligence.audit_visual_quality(
+            attempt_path,
+            str(theme.get("headline") or ""),
+            str(theme.get("support") or ""),
+        )
+        if qa.get("approved"):
+            attempt_path.replace(path)
+            if not qa.get("available"):
+                print("VISUAL_QA_UNAVAILABLE publishing_after_structural_validation", flush=True)
+            else:
+                print(f"VISUAL_QA_APPROVED attempt={attempt}", flush=True)
+            return path
+
+        last_issues = qa.get("issues") or []
+        correction = qa.get("correction") or "; ".join(str(x) for x in last_issues)
+        print(
+            f"VISUAL_QA_REJECTED attempt={attempt} issues={str(last_issues)[:500]}",
+            flush=True,
+        )
+        attempt_path.unlink(missing_ok=True)
+
+    raise RuntimeError(
+        "Criativo reprovado pelo controle de qualidade: "
+        + "; ".join(str(x) for x in last_issues)[:800]
+    )
 
 def _ragnar_price_line():
     plans = BRAND.get("plans_brl") or {}
@@ -1896,9 +1895,31 @@ def _content_brief_for_slot(slot):
 
 
 def _schedule_times():
-    cfg = _nexus_config()
-    raw = cfg.get("postTimes") if isinstance(cfg, dict) else None
-    if not isinstance(raw, list) or not raw:
+    """
+    Agenda autoritativa local do Ragnar.
+
+    Igual ao modelo da Claire: os horários vêm da configuração do próprio
+    serviço. O NEXUS pode orientar conteúdo, mas não pode apagar um horário
+    de postagem por falha ou configuração remota.
+    """
+    raw = []
+    explicit_times = env("AUTO_POST_TIMES")
+    explicit_hours = env("AUTO_POST_HOURS")
+
+    if explicit_times:
+        raw = [x.strip() for x in explicit_times.split(",") if x.strip()]
+    elif explicit_hours:
+        for value in explicit_hours.split(","):
+            value = value.strip()
+            if not value:
+                continue
+            try:
+                hour = int(value)
+            except ValueError:
+                continue
+            if 0 <= hour <= 23:
+                raw.append(f"{hour:02d}:00")
+    else:
         raw = [x.strip() for x in str(get_setting("post_times", DEFAULTS["post_times"])).split(",")]
 
     parsed = []
@@ -1913,7 +1934,6 @@ def _schedule_times():
             parsed.append(item)
 
     return sorted(parsed)[:6] or [(9, 0), (12, 0), (18, 0)]
-
 
 def process_scheduled_posts_once():
     times = _schedule_times()
