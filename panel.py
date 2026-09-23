@@ -895,6 +895,18 @@ def _wrap_lines(draw, text, font, max_width):
 
 
 def _scheduled_theme(slot):
+    # Um único plano por horário: imagem e legenda usam exatamente a mesma ideia.
+    cache_key = f"scheduled_theme_{slot:%Y%m%d_%H%M}"
+    try:
+        with settings_db() as c:
+            row = c.execute("SELECT value FROM settings WHERE key=?", (cache_key,)).fetchone()
+        if row and row[0]:
+            cached = json.loads(row[0])
+            if isinstance(cached, dict) and cached.get("headline") and cached.get("scene"):
+                return cached
+    except Exception:
+        LOG.warning("scheduled_theme_cache_read_failed", exc_info=True)
+
     cfg = _nexus_config()
     profile = _posting_profile()
     brief = _content_brief_for_slot(slot)
@@ -927,7 +939,7 @@ def _scheduled_theme(slot):
             index,
             brand_context,
         )
-    except Exception as exc:
+    except Exception:
         LOG.warning("planner_unavailable", exc_info=True)
         plan = {}
 
@@ -959,7 +971,7 @@ def _scheduled_theme(slot):
         "Use premium cinematic lighting, believable devices, natural anatomy, energy, movement and visual curiosity. "
         "Leave the lower quarter darker for typography."
     )
-    return {
+    theme = {
         "kicker": kicker,
         "headline": headline,
         "support": support,
@@ -967,6 +979,17 @@ def _scheduled_theme(slot):
         "slot_index": index,
         "brief": brief,
     }
+    try:
+        now_ts = time.time()
+        with settings_db() as c:
+            c.execute(
+                "INSERT INTO settings(key,value,updated) VALUES(?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
+                (cache_key, json.dumps(theme, ensure_ascii=False), now_ts),
+            )
+    except Exception:
+        LOG.warning("scheduled_theme_cache_write_failed", exc_info=True)
+    return theme
 
 def _post_ledger_id(slot):
     return f"ragnar-one:{slot:%Y%m%d-%H%M}"
@@ -1936,6 +1959,8 @@ def _schedule_times():
     return sorted(parsed)[:6] or [(9, 0), (12, 0), (18, 0)]
 
 def process_scheduled_posts_once():
+    if env("AUTOMATION_ENABLED").lower() != "true":
+        return
     times = _schedule_times()
     if not times:
         return
@@ -1974,9 +1999,9 @@ def process_scheduled_posts_once():
     # Evita martelar a Meta em caso de erro temporário.
     # O intervalo pode ser reduzido temporariamente via Railway para diagnóstico.
     try:
-        retry_seconds = max(30, int(env("SCHEDULE_RETRY_SECONDS") or "600"))
+        retry_seconds = max(30, int(env("SCHEDULE_RETRY_SECONDS") or "120"))
     except ValueError:
-        retry_seconds = 600
+        retry_seconds = 120
     if attempt_age is not None and attempt_age < retry_seconds:
         return
 
