@@ -39,9 +39,12 @@ DEFAULTS = {
     ),
     "content_guidance": (
         "Criar conteúdo visual premium, cinematográfico e rico em imagens para a Ragnar One. "
-        "Paleta obrigatória: preto, verde e branco. Sempre usar cenas realistas com pessoas, TV, celular, "
-        "futebol, filmes ou séries. Nunca publicar card simples apenas com texto. "
-        "Foco nas dores: travamentos em jogos, delay, filmes e séries travando e suporte que não responde."
+        "Paleta obrigatória: preto, verde e branco. REGRA INEGOCIÁVEL: toda imagem precisa mostrar pelo menos "
+        "uma pessoa realista e pelo menos um dispositivo de entretenimento claramente visível (TV, smartphone, "
+        "tablet ou notebook). Priorizar pessoas assistindo TV, segurando celular, vendo futebol, filmes ou séries. "
+        "É proibido publicar cena vazia, estádio vazio, TV sozinha, celular sozinho, formas abstratas, card genérico "
+        "ou peça baseada apenas em texto. Foco nas dores: travamentos em jogos, delay, filmes e séries travando e "
+        "suporte que não responde."
     ),
     "posts_per_day": "3",
     "post_times": "09:00, 12:00, 18:00",
@@ -935,8 +938,13 @@ def _scheduled_theme(slot):
         f"Target audience: {audience}. Creative brief: {brief or focus}. "
         f"Visual style: {style}. Communication tone: {tone}. "
         f"Avoid: {avoid}. NO text, letters, logos, captions or watermarks inside the generated image. "
-        "Prioritize a cinematic realistic scene with a clear visual subject, premium lighting, depth, "
-        "people/devices/football/entertainment when appropriate, and leave the lower quarter darker for typography."
+        "MANDATORY COMPOSITION: show at least ONE realistic human person AND at least ONE clearly visible "
+        "entertainment device such as a television, smartphone, tablet or laptop. The person must be actively "
+        "watching, holding or interacting with the device. Prefer a premium living room, sports-viewing, movie-night "
+        "or streaming scene. NEVER generate an empty stadium, empty room, device-only composition, abstract-only "
+        "artwork, floating screens, generic poster background or text-only card. Use premium cinematic lighting, "
+        "photorealistic people, natural anatomy, realistic hands and believable devices. Leave the lower quarter darker "
+        "for typography."
     )
     return {
         "kicker": kicker,
@@ -1208,7 +1216,7 @@ def _generate_local_fallback_scene(slot, primary, secondary, theme=None):
 def _generate_premium_scene(slot, theme):
     folder = data_root() / "test-posts"
     folder.mkdir(parents=True, exist_ok=True)
-    raw_path = folder / f"ragnar-scene-premium-v4-{slot:%Y%m%d-%H%M}.png"
+    raw_path = folder / f"ragnar-scene-premium-v5-{slot:%Y%m%d-%H%M}.png"
     if raw_path.exists() and raw_path.stat().st_size > 100000:
         return raw_path
 
@@ -1224,6 +1232,10 @@ def _generate_premium_scene(slot, theme):
         f"Use the client's preferred visual style: {profile.get('visualStyle') or 'premium cinematic'}. "
         f"Use the client's main brand color {primary} and secondary color {secondary} as lighting/accent inspiration. "
         "Show rich visual storytelling; avoid a plain background or poster-like text card. "
+        "NON-NEGOTIABLE QUALITY GATE: the image MUST contain a realistic person AND a visible TV, smartphone, "
+        "tablet or laptop. If the concept does not include both a person and a device, it is invalid. "
+        "Do not use an empty room, empty stadium, isolated TV, isolated phone, abstract graphics or futuristic "
+        "floating-screen composition. Human subject first, entertainment context second, brand color only as accent. "
         + theme["scene"]
     )
     payload = {
@@ -1287,10 +1299,13 @@ def _generate_premium_scene(slot, theme):
         return raw_path
     except Exception as exc:
         print(
-            "OPENAI_IMAGE_FALLBACK_LOCAL error=" + str(exc)[:300],
+            "PREMIUM_CREATIVE_BLOCKED error=" + str(exc)[:300],
             flush=True,
         )
-        return _generate_local_fallback_scene(slot, primary, secondary, theme)
+        raise RuntimeError(
+            "Criativo premium bloqueado: a geração por IA falhou. "
+            "Fallback local desativado para impedir postagem de arte fora do padrão aprovado."
+        ) from exc
 
 def _draw_centered(draw, box, text, font, fill):
     bbox = draw.textbbox((0, 0), text, font=font)
@@ -1311,7 +1326,7 @@ def _create_scheduled_post_image(slot):
                 "primary": cfg.get("primaryColor"),
                 "secondary": cfg.get("secondaryColor"),
                 "profile": profile,
-                "renderer": "premium-v4",
+                "renderer": "premium-v5-human-device",
             },
             sort_keys=True,
             ensure_ascii=False,
@@ -1429,6 +1444,8 @@ def _scheduled_caption(slot):
 
 
 def _publish_scheduled_image(slot):
+    # Regra absoluta: publica somente criativo premium gerado por IA.
+    # Fallback local foi proibido porque não garante pessoa + TV/dispositivo no padrão aprovado.
     # Regra: publica somente uma imagem 4:5 válida. O tamanho em bytes não é
     # usado como critério de qualidade porque PNG otimizado pode ficar menor.
     image = _create_scheduled_post_image(slot)
