@@ -23,6 +23,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageFilter, ImageOps
 import content_intelligence
 
 LOG = logging.getLogger("ragnar.panel")
+BRAND = json.loads(Path(__file__).with_name("brand.json").read_text())
 
 COOKIE_NAME = "ragnar_panel"
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".m4v"}
@@ -38,13 +39,12 @@ DEFAULTS = {
         "Não invente informações. Direcione dúvidas comerciais para o site ou WhatsApp."
     ),
     "content_guidance": (
-        "Criar conteúdo visual premium, cinematográfico e rico em imagens para a Ragnar One. "
-        "Paleta obrigatória: preto, verde e branco. REGRA INEGOCIÁVEL: toda imagem precisa mostrar pelo menos "
-        "uma pessoa realista e pelo menos um dispositivo de entretenimento claramente visível (TV, smartphone, "
-        "tablet ou notebook). Priorizar pessoas assistindo TV, segurando celular, vendo futebol, filmes ou séries. "
-        "É proibido publicar cena vazia, estádio vazio, TV sozinha, celular sozinho, formas abstratas, card genérico "
-        "ou peça baseada apenas em texto. Foco nas dores: travamentos em jogos, delay, filmes e séries travando e "
-        "suporte que não responde."
+        "Criar conteúdo visual premium, cinematográfico e feito para parar o scroll para a Ragnar One. "
+        "Paleta obrigatória: preto, verde e branco. Priorizar entretenimento aspiracional, futebol, noite de cinema, "
+        "maratona, descoberta de conteúdo, pessoas se divertindo e uso natural de TV, smartphone, tablet ou notebook. "
+        "Dor pode aparecer apenas como contexto de copy. É PROIBIDO usar homem sofrendo, pessoa triste/desesperada, "
+        "rosto de raiva, casal brigando ou comparação antes triste/depois feliz. Variar cenário e mecanismo visual, "
+        "evitar card genérico e buscar ação, curiosidade, emoção positiva e leitura imediata no celular."
     ),
     "posts_per_day": "3",
     "post_times": "09:00, 12:00, 18:00",
@@ -915,19 +915,19 @@ def _scheduled_theme(slot):
 
     variants = {
         0: [
-            ("SEM ESTRESSE", "Chega de travar na melhor hora.", "Entretenimento com uma experiência mais estável do começo ao fim."),
-            ("FLUIDEZ PRIMEIRO", "Seu momento merece continuar.", "Menos interrupção e mais tranquilidade para assistir."),
-            ("TODO DIA", "Dê play. O resto precisa acompanhar.", "Uma experiência pensada para quem quer assistir sem dor de cabeça."),
+            ("DÊ PLAY", "Seu momento começa agora.", "Entretenimento para transformar uma noite comum em sessão especial."),
+            ("NA SUA TELA", "O que vai entrar na sua tela hoje?", "Escolha, descubra e curta seu momento do seu jeito."),
+            ("MODO DIVERSÃO", "Hoje a programação é aproveitar.", "Uma experiência de entretenimento feita para prender sua atenção."),
         ],
         1: [
-            ("FILMES & SÉRIES", "Sua maratona não precisa parar.", "Filmes, séries e entretenimento para aproveitar no seu ritmo."),
-            ("SEU MOMENTO", "Mais história. Menos interrupção.", "Curta seus conteúdos favoritos com uma experiência mais tranquila."),
-            ("ENTRETENIMENTO", "A próxima história começa agora.", "Filmes e séries ganham outra experiência quando tudo flui."),
+            ("FILMES & SÉRIES", "Seu sofá virou cinema.", "Prepare a pipoca e escolha a próxima história."),
+            ("MARATONA ATIVADA", "Só falta escolher o próximo episódio.", "Clima de cinema, conforto e entretenimento na sua tela."),
+            ("ESCOLHA A HISTÓRIA", "Filme, série ou maratona?", "Uma noite pode começar com uma simples escolha."),
         ],
         2: [
-            ("DIA DE JOGO", "A bola rola. Você não perde o lance.", "Futebol pede emoção, estabilidade e atenção em cada jogada."),
-            ("FUTEBOL AO VIVO", "O jogo esquenta. Sua tela acompanha.", "Não deixe o melhor lance virar uma tela travada."),
-            ("NÃO PERCA O LANCE", "Noventa minutos pedem concentração total.", "Mais tranquilidade para acompanhar cada momento do jogo."),
+            ("HOJE TEM JOGO", "Sua tela está pronta?", "Futebol é expectativa, emoção e cada lance vivido junto."),
+            ("CLIMA DE JOGO", "A torcida começa antes do apito.", "Reúna a galera e entre no clima da partida."),
+            ("É DIA DE FUTEBOL", "O próximo lance pode mudar tudo.", "Energia de estádio e emoção para acompanhar cada momento."),
         ],
     }
     choices = variants.get(min(index, 2), variants[0])
@@ -938,13 +938,13 @@ def _scheduled_theme(slot):
         f"Target audience: {audience}. Creative brief: {brief or focus}. "
         f"Visual style: {style}. Communication tone: {tone}. "
         f"Avoid: {avoid}. NO text, letters, logos, captions or watermarks inside the generated image. "
-        "MANDATORY COMPOSITION: show at least ONE realistic human person AND at least ONE clearly visible "
-        "entertainment device such as a television, smartphone, tablet or laptop. The person must be actively "
-        "watching, holding or interacting with the device. Prefer a premium living room, sports-viewing, movie-night "
-        "or streaming scene. NEVER generate an empty stadium, empty room, device-only composition, abstract-only "
-        "artwork, floating screens, generic poster background or text-only card. Use premium cinematic lighting, "
-        "photorealistic people, natural anatomy, realistic hands and believable devices. Leave the lower quarter darker "
-        "for typography."
+        "ATTENTION-FIRST COMPOSITION: create an upbeat, desirable entertainment moment with a clear focal point in the "
+        "first glance. Prefer cinematic movie-night scenes, football excitement, friends/family enjoying the moment, "
+        "content discovery, premium living-room atmosphere or natural multi-device use. A person may be present when "
+        "it strengthens the concept, but never depict suffering, sadness, anger, despair, frustration, crying, arguing, "
+        "or a split-screen sad-versus-happy before/after. Do not generate generic text cards or empty lifeless scenes. "
+        "Use premium cinematic lighting, believable devices, natural anatomy, energy, movement and visual curiosity. "
+        "Leave the lower quarter darker for typography."
     )
     return {
         "kicker": kicker,
@@ -1232,10 +1232,10 @@ def _generate_premium_scene(slot, theme):
         f"Use the client's preferred visual style: {profile.get('visualStyle') or 'premium cinematic'}. "
         f"Use the client's main brand color {primary} and secondary color {secondary} as lighting/accent inspiration. "
         "Show rich visual storytelling; avoid a plain background or poster-like text card. "
-        "NON-NEGOTIABLE QUALITY GATE: the image MUST contain a realistic person AND a visible TV, smartphone, "
-        "tablet or laptop. If the concept does not include both a person and a device, it is invalid. "
-        "Do not use an empty room, empty stadium, isolated TV, isolated phone, abstract graphics or futuristic "
-        "floating-screen composition. Human subject first, entertainment context second, brand color only as accent. "
+        "NON-NEGOTIABLE QUALITY GATE: the image must communicate entertainment, curiosity or excitement instantly. "
+        "Never show a suffering man, sad person, angry face, despair, arguments or a before/after sad-versus-happy comparison. "
+        "Prefer a positive cinematic moment, strong focal action, believable entertainment context and natural device use. "
+        "Brand colors are accents, not the whole scene. "
         + theme["scene"]
     )
     payload = {
@@ -1430,17 +1430,40 @@ def _create_scheduled_post_image(slot):
     return path
 
 
+def _ragnar_price_line():
+    plans = BRAND.get("plans_brl") or {}
+    return (
+        f"1 MÊS R$ {plans.get('mensal', 25)} • "
+        f"3 MESES R$ {plans.get('trimestral', 60)} • "
+        f"6 MESES R$ {plans.get('semestral', 110)} • "
+        f"12 MESES R$ {plans.get('anual', 190)}"
+    )
+
+
 def _scheduled_caption(slot):
     theme = _scheduled_theme(slot)
     profile = _posting_profile()
     cta = str(profile.get("cta") or 'Comente "QUERO" e saiba mais')
     hashtags = str(profile.get("hashtags") or "#RagnarOne #Streaming #Entretenimento")
-    return (
+    base = (
         theme["headline"] + "\n\n"
         + theme["support"] + "\n\n"
+        + _ragnar_price_line() + "\n\n"
         + cta + "\n\n"
         + hashtags
     )
+    try:
+        account = env("INSTAGRAM_ACCOUNT_ID")
+        if account:
+            return content_intelligence.optimized_caption(
+                settings_db,
+                _graph_get,
+                account,
+                base,
+            )
+    except Exception:
+        LOG.warning("caption_intelligence_unavailable", exc_info=True)
+    return base
 
 
 def _publish_scheduled_image(slot):
