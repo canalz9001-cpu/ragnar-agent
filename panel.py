@@ -948,6 +948,85 @@ def _scheduled_theme(slot):
     }
 
 
+def _post_ledger_id(slot):
+    return f"ragnar-one:{slot:%Y%m%d-%H%M}"
+
+
+def _nexus_post_event(slot, status, media_id="", error="", cost_delta_usd=None, model="", cost_source=""):
+    token = env("NEXUS_AGENT_TOKEN")
+    if not token:
+        return False
+    url = env("NEXUS_POST_EVENT_URL") or (
+        "https://servidor-global-play-production.up.railway.app/"
+        "api/agent/ragnar-one/posts/event"
+    )
+    body = {
+        "postId": _post_ledger_id(slot),
+        "scheduledFor": slot.isoformat(),
+        "scheduledHour": slot.strftime("%H:%M"),
+        "status": status,
+    }
+    if media_id:
+        body["mediaId"] = str(media_id)
+    if error:
+        body["error"] = str(error)[:900]
+    if model:
+        body["model"] = str(model)
+    if cost_source:
+        body["costSource"] = str(cost_source)
+    if cost_delta_usd is not None:
+        try:
+            value = float(cost_delta_usd)
+            if value > 0:
+                body["costDeltaUsd"] = value
+        except (TypeError, ValueError):
+            pass
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Authorization": "Bearer " + token,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "RagnarAgent-Nexus/1.0",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as response:
+            return 200 <= int(response.status) < 300
+    except Exception:
+        LOG.warning("nexus_post_event_unavailable", exc_info=True)
+        return False
+
+
+def _image_usage_cost_usd(usage, model):
+    if not isinstance(usage, dict):
+        return None
+    name = str(model or "")
+    if name.startswith("gpt-image-2.5"):
+        rates = {"text_in": 5.0, "image_in": 8.0, "cached_image_in": 2.0, "image_out": 30.0}
+    elif name == "gpt-image-2":
+        rates = {"text_in": 2.5, "image_in": 4.0, "cached_image_in": 1.0, "image_out": 15.0}
+    else:
+        return None
+    details = usage.get("input_tokens_details") or usage.get("input_details") or {}
+    try:
+        text_in = float(details.get("text_tokens", usage.get("input_text_tokens", usage.get("input_tokens", 0))) or 0)
+        image_in = float(details.get("image_tokens", usage.get("input_image_tokens", 0)) or 0)
+        cached_image_in = float(details.get("cached_image_tokens", 0) or 0)
+        image_out = float(usage.get("output_tokens", usage.get("output_image_tokens", 0)) or 0)
+    except (TypeError, ValueError):
+        return None
+    value = (
+        max(0, text_in) * rates["text_in"]
+        + max(0, image_in - cached_image_in) * rates["image_in"]
+        + max(0, cached_image_in) * rates["cached_image_in"]
+        + max(0, image_out) * rates["image_out"]
+    ) / 1000000.0
+    return value if value >= 0 else None
+
+
 def _nexus_generate_image(payload):
     token = env("NEXUS_AGENT_TOKEN")
     if not token:
@@ -1152,6 +1231,9 @@ def _generate_premium_scene(slot, theme):
         "prompt": prompt,
         "size": "1024x1536",
         "quality": env("OPENAI_IMAGE_QUALITY") or "medium",
+        "postId": _post_ledger_id(slot),
+        "scheduledFor": slot.isoformat(),
+        "scheduledHour": slot.strftime("%H:%M"),
     }
 
     try:
@@ -1173,6 +1255,15 @@ def _generate_premium_scene(slot, theme):
             try:
                 with urllib.request.urlopen(req, timeout=180) as response:
                     result = json.load(response)
+                local_cost = _image_usage_cost_usd(result.get("usage"), payload.get("model"))
+                if local_cost is not None and local_cost > 0:
+                    _nexus_post_event(
+                        slot,
+                        "generating",
+                        cost_delta_usd=local_cost,
+                        model=payload.get("model") or "",
+                        cost_source="openai_usage",
+                    )
             except urllib.error.HTTPError as exc:
                 raw = exc.read().decode("utf-8", "replace")
                 try:
@@ -1564,6 +1655,17 @@ def process_manual_image_post_once():
         container = c.execute("SELECT value FROM settings WHERE key=?", (container_key,)).fetchone()
         started = c.execute("SELECT value FROM settings WHERE key=?", (started_key,)).fetchone()
     if done and done[0]:
+        sync_key = f"schedule_image_nexus_sync_{slot:%Y%m%d_%H%M}"
+        with settings_db() as c:
+            synced = c.execute("SELECT value FROM settings WHERE key=?", (sync_key,)).fetchone()
+        if not synced or not synced[0]:
+            if _nexus_post_event(slot, "published", media_id=done[0]):
+                with settings_db() as c:
+                    c.execute(
+                        "INSERT INTO settings(key,value,updated) VALUES(?,?,?) "
+                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
+                        (sync_key, "1", time.time()),
+                    )
         return
 
     try:
@@ -1827,6 +1929,7 @@ def process_scheduled_posts_once():
         )
 
     print(f"SCHEDULE_IMAGE_ATTEMPT slot={slot:%Y-%m-%d_%H:%M}", flush=True)
+    _nexus_post_event(slot, "generating")
     try:
         media_id = _publish_scheduled_image(slot)
         with settings_db() as c:
@@ -1840,6 +1943,7 @@ def process_scheduled_posts_once():
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
                 (error_key, "", time.time()),
             )
+        _nexus_post_event(slot, "published", media_id=media_id)
         print(
             f"SCHEDULE_IMAGE_SUCCESS slot={slot:%Y-%m-%d_%H:%M} media_id={media_id}",
             flush=True,
@@ -1851,6 +1955,7 @@ def process_scheduled_posts_once():
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
                 (error_key, str(exc)[:1000], time.time()),
             )
+        _nexus_post_event(slot, "failed", error=str(exc))
         print(
             f"SCHEDULE_IMAGE_ERROR slot={slot:%Y-%m-%d_%H:%M} error={str(exc)[:700]}",
             flush=True,
