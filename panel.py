@@ -1457,7 +1457,7 @@ def _scheduled_caption(slot):
         if account:
             return content_intelligence.optimized_caption(
                 settings_db,
-                _graph_get,
+                _graph_request,
                 account,
                 base,
             )
