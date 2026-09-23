@@ -903,26 +903,48 @@ def _scheduled_theme(slot):
     tone = str(profile.get("tone") or "Firme, direto e profissional")
     avoid = str(profile.get("avoidTopics") or "Promessas irreais e poluição visual")
 
-    headline = brief or focus
-    if len(headline) > 92:
-        headline = headline[:89].rstrip() + "..."
-    support = f"{strategy} para {audience}. {focus}"
-    if len(support) > 150:
-        support = support[:147].rstrip() + "..."
+    # Copy curta e visual. O post precisa parecer campanha, não relatório do agente.
+    index = 0
+    for i, (hh, mm) in enumerate(_schedule_times()):
+        if (hh, mm) == (slot.hour, slot.minute):
+            index = i
+            break
+
+    variants = {
+        0: [
+            ("SEM ESTRESSE", "Chega de travar na melhor hora.", "Entretenimento com uma experiência mais estável do começo ao fim."),
+            ("FLUIDEZ PRIMEIRO", "Seu momento merece continuar.", "Menos interrupção e mais tranquilidade para assistir."),
+            ("TODO DIA", "Dê play. O resto precisa acompanhar.", "Uma experiência pensada para quem quer assistir sem dor de cabeça."),
+        ],
+        1: [
+            ("FILMES & SÉRIES", "Sua maratona não precisa parar.", "Filmes, séries e entretenimento para aproveitar no seu ritmo."),
+            ("SEU MOMENTO", "Mais história. Menos interrupção.", "Curta seus conteúdos favoritos com uma experiência mais tranquila."),
+            ("ENTRETENIMENTO", "A próxima história começa agora.", "Filmes e séries ganham outra experiência quando tudo flui."),
+        ],
+        2: [
+            ("DIA DE JOGO", "A bola rola. Você não perde o lance.", "Futebol pede emoção, estabilidade e atenção em cada jogada."),
+            ("FUTEBOL AO VIVO", "O jogo esquenta. Sua tela acompanha.", "Não deixe o melhor lance virar uma tela travada."),
+            ("NÃO PERCA O LANCE", "Noventa minutos pedem concentração total.", "Mais tranquilidade para acompanhar cada momento do jogo."),
+        ],
+    }
+    choices = variants.get(min(index, 2), variants[0])
+    kicker, headline, support = choices[slot.timetuple().tm_yday % len(choices)]
 
     scene = (
-        f"Create a premium social-media advertising scene for the niche {niche}. "
-        f"Target audience: {audience}. Campaign strategy: {strategy}. "
-        f"Creative brief for this post: {brief or focus}. "
+        f"Create a premium vertical advertising photograph for the niche {niche}. "
+        f"Target audience: {audience}. Creative brief: {brief or focus}. "
         f"Visual style: {style}. Communication tone: {tone}. "
-        f"Avoid: {avoid}. Show a realistic scene that clearly supports the brief, "
-        "with polished commercial photography and strong visual storytelling."
+        f"Avoid: {avoid}. NO text, letters, logos, captions or watermarks inside the generated image. "
+        "Prioritize a cinematic realistic scene with a clear visual subject, premium lighting, depth, "
+        "people/devices/football/entertainment when appropriate, and leave the lower quarter darker for typography."
     )
     return {
-        "kicker": strategy.upper()[:30],
+        "kicker": kicker,
         "headline": headline,
         "support": support,
         "scene": scene,
+        "slot_index": index,
+        "brief": brief,
     }
 
 
@@ -964,53 +986,150 @@ def _nexus_generate_image(payload):
         return None
 
 
-def _generate_local_fallback_scene(slot, primary, secondary):
+def _generate_local_fallback_scene(slot, primary, secondary, theme=None):
+    """
+    Fallback visual de verdade para quando a IA de imagem estiver indisponível.
+    Em vez de um fundo vazio, cria uma cena editorial/ilustrada coerente com o horário:
+    estabilidade/dispositivos, cinema ou futebol.
+    """
     folder = data_root() / "test-posts"
     folder.mkdir(parents=True, exist_ok=True)
-    path = folder / f"ragnar-scene-fallback-{slot:%Y%m%d-%H%M}.png"
-    if path.exists() and path.stat().st_size > 100000:
+    path = folder / f"ragnar-scene-fallback-v2-{slot:%Y%m%d-%H%M}.png"
+    if path.exists() and path.stat().st_size > 120000:
         return path
 
     size = (1024, 1536)
-    base = Image.new("RGB", size, _hex_rgb(secondary, (3, 10, 7)))
-    px = base.load()
-    p = _hex_rgb(primary, (25, 197, 99))
-    s = _hex_rgb(secondary, (3, 10, 7))
+    p = _hex_rgb(primary, (34, 197, 94))
+    s = _hex_rgb(secondary, (5, 8, 7))
 
+    # Gradiente vertical escuro, rápido e limpo.
+    strip = Image.new("RGB", (1, size[1]))
+    strip_px = strip.load()
     for y in range(size[1]):
         t = y / max(1, size[1] - 1)
-        for x in range(size[0]):
-            glow = max(0.0, 1.0 - (((x - 720) / 720) ** 2 + ((y - 380) / 820) ** 2))
-            mix = min(1.0, 0.10 + glow * 0.55 + (1.0 - t) * 0.10)
-            px[x, y] = tuple(
-                max(0, min(255, int(s[i] * (1 - mix) + p[i] * mix)))
-                for i in range(3)
-            )
+        top = tuple(min(255, int(v * 1.65 + 10)) for v in s)
+        bottom = tuple(max(0, int(v * 0.55)) for v in s)
+        strip_px[0, y] = tuple(int(top[i] * (1 - t) + bottom[i] * t) for i in range(3))
+    base = strip.resize(size).convert("RGBA")
 
-    noise = Image.effect_noise(size, 28).convert("L")
-    noise_rgb = ImageOps.colorize(noise, black=(0, 0, 0), white=tuple(min(255, v + 45) for v in p))
-    base = Image.blend(base, noise_rgb, 0.10)
+    # Luzes cinematográficas.
+    glow = Image.new("RGBA", size, (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glow)
+    gd.ellipse((430, -160, 1280, 700), fill=(*p, 72))
+    gd.ellipse((-420, 230, 420, 1100), fill=(10, 75, 45, 45))
+    glow = glow.filter(ImageFilter.GaussianBlur(110))
+    base = Image.alpha_composite(base, glow)
 
-    overlay = Image.new("RGBA", size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
-    for radius, alpha in ((380, 40), (300, 55), (220, 75)):
-        box = (720-radius, 310-radius, 720+radius, 310+radius)
-        draw.ellipse(box, outline=(*p, alpha), width=3)
-    for offset in range(-700, 900, 120):
-        draw.line((offset, 0, offset + 900, 1536), fill=(*p, 18), width=2)
-    draw.rectangle((0, 1040, 1024, 1536), fill=(0, 0, 0, 92))
+    canvas = Image.new("RGBA", size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(canvas)
 
-    img = Image.alpha_composite(base.convert("RGBA"), overlay).convert("RGB")
-    img.save(path, "PNG", optimize=False)
-    if path.stat().st_size < 100000:
-        img.save(path, "PNG", compress_level=1)
+    idx = int((theme or {}).get("slot_index", 0))
+    if idx >= 2:
+        # ===== Estádio noturno =====
+        # Arquibancadas.
+        d.ellipse((-220, 245, 1244, 1120), fill=(8, 17, 14, 255), outline=(*p, 90), width=5)
+        d.ellipse((-145, 335, 1169, 1040), fill=(4, 10, 8, 255), outline=(230, 255, 240, 35), width=3)
+        # Pontos de torcida.
+        for row in range(9):
+            y = 455 + row * 42
+            for col in range(23):
+                x = 78 + col * 40 + (row % 2) * 17
+                alpha = 155 if (col + row) % 5 == 0 else 75
+                color = (240, 250, 245, alpha) if (col + row) % 4 else (*p, alpha)
+                d.ellipse((x, y, x + 5, y + 5), fill=color)
+        # Campo em perspectiva.
+        d.polygon([(118, 760), (906, 760), (1110, 1425), (-86, 1425)], fill=(7, 70, 34, 255))
+        d.polygon([(170, 805), (854, 805), (980, 1320), (44, 1320)], outline=(205, 245, 220, 170), width=4)
+        d.line((512, 805, 512, 1390), fill=(210, 245, 220, 120), width=4)
+        d.ellipse((374, 930, 650, 1140), outline=(210, 245, 220, 115), width=4)
+        # Refletores.
+        for x in (92, 860):
+            d.line((x, 300, x + (55 if x < 500 else -55), 755), fill=(90, 110, 100, 255), width=11)
+            d.rounded_rectangle((x - 58, 260, x + 72, 330), radius=10, fill=(210, 235, 225, 235))
+            for yy in range(274, 316, 18):
+                for xx in range(x - 42, x + 55, 24):
+                    d.ellipse((xx, yy, xx + 8, yy + 8), fill=(255, 255, 235, 255))
+        # Bola em primeiro plano.
+        bx, by, br = 785, 1000, 128
+        d.ellipse((bx-br, by-br, bx+br, by+br), fill=(238, 245, 241, 255), outline=(255,255,255,210), width=6)
+        pent = [(bx,by-46),(bx+45,by-13),(bx+28,by+42),(bx-28,by+42),(bx-45,by-13)]
+        d.polygon(pent, fill=(15, 22, 19, 255))
+        for dx, dy in [(-69,-31),(70,-27),(-57,64),(58,70)]:
+            d.polygon([(bx+dx,by+dy-24),(bx+dx+22,by+dy-7),(bx+dx+14,by+dy+20),(bx+dx-15,by+dy+20),(bx+dx-23,by+dy-7)], fill=(24,31,28,240))
+    elif idx == 1:
+        # ===== Sala / cinema premium =====
+        # Parede e painel de TV.
+        d.rounded_rectangle((96, 190, 928, 955), radius=36, fill=(8, 14, 18, 245), outline=(255,255,255,25), width=3)
+        d.rounded_rectangle((145, 248, 879, 805), radius=26, fill=(1, 5, 8, 255), outline=(*p, 110), width=4)
+        # Cena abstrata dentro da TV: horizonte/cidade cinematográfica.
+        d.rectangle((164, 266, 860, 785), fill=(6, 18, 23, 255))
+        d.ellipse((570, 300, 815, 545), fill=(*p, 95))
+        for x, h in [(190,170),(250,240),(320,135),(378,285),(456,205),(522,315),(610,190),(676,250),(744,160),(804,220)]:
+            d.rectangle((x, 785-h, x+42, 785), fill=(10, 24, 29, 255))
+            for wy in range(785-h+22, 770, 34):
+                d.rectangle((x+10, wy, x+16, wy+8), fill=(*p, 135))
+                d.rectangle((x+26, wy, x+32, wy+8), fill=(230,245,238,80))
+        # Reflexo e play sem texto.
+        d.ellipse((462, 466, 562, 566), fill=(0,0,0,150), outline=(255,255,255,85), width=3)
+        d.polygon([(500,490),(500,542),(540,516)], fill=(245,250,248,225))
+        # Móvel e luz ambiente.
+        d.rounded_rectangle((180, 842, 844, 925), radius=20, fill=(10, 18, 16, 255))
+        d.rectangle((218, 925, 250, 1050), fill=(8, 12, 11, 255))
+        d.rectangle((774, 925, 806, 1050), fill=(8, 12, 11, 255))
+        # Sofá em primeiro plano.
+        d.rounded_rectangle((82, 1040, 942, 1430), radius=88, fill=(8, 11, 12, 255), outline=(255,255,255,20), width=3)
+        d.rounded_rectangle((140, 990, 472, 1230), radius=70, fill=(14, 21, 20, 255))
+        d.rounded_rectangle((552, 990, 884, 1230), radius=70, fill=(14, 21, 20, 255))
+        # Controle remoto no apoio.
+        d.rounded_rectangle((485, 1110, 548, 1260), radius=22, fill=(24, 31, 29, 255), outline=(*p, 120), width=3)
+        d.ellipse((505, 1130, 528, 1153), fill=(*p, 210))
+    else:
+        # ===== Ecossistema de dispositivos / estabilidade =====
+        # TV ao fundo.
+        d.rounded_rectangle((90, 220, 790, 840), radius=38, fill=(4, 9, 12, 250), outline=(255,255,255,28), width=3)
+        d.rounded_rectangle((130, 260, 750, 790), radius=24, fill=(6, 22, 18, 255), outline=(*p, 90), width=4)
+        # Paisagem visual no display.
+        d.polygon([(130,650),(290,470),(420,600),(560,390),(750,610),(750,790),(130,790)], fill=(13, 68, 42, 255))
+        d.ellipse((530, 315, 675, 460), fill=(*p, 130))
+        # Smartphone em destaque.
+        d.rounded_rectangle((610, 510, 945, 1165), radius=54, fill=(8, 12, 14, 255), outline=(210,245,230,90), width=5)
+        d.rounded_rectangle((635, 565, 920, 1108), radius=38, fill=(5, 27, 18, 255))
+        d.rounded_rectangle((672, 635, 882, 760), radius=18, fill=(*p, 105))
+        d.ellipse((750, 660, 805, 715), fill=(0,0,0,120))
+        d.polygon([(773,674),(773,704),(797,689)], fill=(245,250,247,230))
+        for yy, ww in [(815,165),(865,205),(915,145),(965,188)]:
+            d.rounded_rectangle((672, yy, 672+ww, yy+20), radius=10, fill=(215,238,226,80))
+        # Notebook parcial.
+        d.rounded_rectangle((95, 900, 565, 1210), radius=26, fill=(14, 20, 22, 255), outline=(255,255,255,30), width=3)
+        d.rectangle((128, 934, 532, 1170), fill=(5, 38, 24, 255))
+        d.polygon([(55,1210),(605,1210),(675,1320),(-15,1320)], fill=(20,26,27,255))
+        # Arcos de conexão.
+        for radius, alpha in [(190,110),(245,75),(300,45)]:
+            d.arc((420-radius, 335-radius, 420+radius, 335+radius), 205, 335, fill=(*p,alpha), width=7)
+
+    # Glow e profundidade sobre as formas.
+    canvas = canvas.filter(ImageFilter.GaussianBlur(0.35))
+    base = Image.alpha_composite(base, canvas)
+
+    # Vinheta sutil.
+    vignette = Image.new("RGBA", size, (0,0,0,0))
+    vd = ImageDraw.Draw(vignette)
+    for i in range(0, 190, 10):
+        alpha = int(2 + i * 0.33)
+        vd.rectangle((i, i, size[0]-i, size[1]-i), outline=(0,0,0,alpha), width=12)
+    base = Image.alpha_composite(base, vignette)
+
+    img = base.convert("RGB")
+    img = ImageEnhance.Contrast(img).enhance(1.07)
+    img = ImageEnhance.Color(img).enhance(1.12)
+    img.save(path, "PNG", compress_level=3)
     return path
 
 
 def _generate_premium_scene(slot, theme):
     folder = data_root() / "test-posts"
     folder.mkdir(parents=True, exist_ok=True)
-    raw_path = folder / f"ragnar-scene-green-v3-{slot:%Y%m%d-%H%M}.png"
+    raw_path = folder / f"ragnar-scene-premium-v4-{slot:%Y%m%d-%H%M}.png"
     if raw_path.exists() and raw_path.stat().st_size > 100000:
         return raw_path
 
@@ -1080,7 +1199,7 @@ def _generate_premium_scene(slot, theme):
             "OPENAI_IMAGE_FALLBACK_LOCAL error=" + str(exc)[:300],
             flush=True,
         )
-        return _generate_local_fallback_scene(slot, primary, secondary)
+        return _generate_local_fallback_scene(slot, primary, secondary, theme)
 
 def _draw_centered(draw, box, text, font, fill):
     bbox = draw.textbbox((0, 0), text, font=font)
@@ -1101,6 +1220,7 @@ def _create_scheduled_post_image(slot):
                 "primary": cfg.get("primaryColor"),
                 "secondary": cfg.get("secondaryColor"),
                 "profile": profile,
+                "renderer": "premium-v4",
             },
             sort_keys=True,
             ensure_ascii=False,
@@ -1118,91 +1238,78 @@ def _create_scheduled_post_image(slot):
     except Exception as exc:
         raise RuntimeError("A cena premium gerada não pôde ser aberta.") from exc
 
-    # Formato 4:5 do Instagram, preservando a fotografia gerada.
+    # Formato 4:5 do Instagram. A cena ocupa o post; a tipografia apenas complementa.
     img = ImageOps.fit(src, (1080, 1350), method=Image.Resampling.LANCZOS, centering=(0.5, 0.46))
-    img = ImageEnhance.Contrast(img).enhance(1.06)
-    img = ImageEnhance.Color(img).enhance(0.95)
+    img = ImageEnhance.Contrast(img).enhance(1.08)
+    img = ImageEnhance.Color(img).enhance(1.04)
 
-    # Overlay escuro inferior para manter a imagem visível e garantir leitura perfeita.
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     od = ImageDraw.Draw(overlay)
-    for y in range(500, 1350):
-        alpha = int(min(222, max(0, (y - 500) / 850 * 222)))
-        od.rectangle((0, y, 1080, y + 1), fill=(2, 8, 5, alpha))
-    od.rectangle((0, 0, 1080, 180), fill=(0, 0, 0, 108))
+    # Vinheta superior leve e gradiente inferior para leitura, sem esconder a cena.
+    for y in range(0, 250):
+        alpha = int(95 * (1 - y / 250))
+        od.rectangle((0, y, 1080, y + 1), fill=(0, 0, 0, alpha))
+    for y in range(610, 1350):
+        alpha = int(min(230, max(0, (y - 610) / 740 * 230)))
+        od.rectangle((0, y, 1080, y + 1), fill=(2, 6, 5, alpha))
     img = Image.alpha_composite(img.convert("RGBA"), overlay)
 
     draw = ImageDraw.Draw(img)
     font_bold = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
     font_regular = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    brand = ImageFont.truetype(font_bold, 76)
-    brand_one = ImageFont.truetype(font_bold, 76)
-    kicker = ImageFont.truetype(font_bold, 29)
-    headline = ImageFont.truetype(font_bold, 58)
-    support = ImageFont.truetype(font_regular, 31)
-    cta = ImageFont.truetype(font_bold, 49)
-    footer = ImageFont.truetype(font_regular, 25)
+    brand = ImageFont.truetype(font_bold, 54)
+    kicker_font = ImageFont.truetype(font_bold, 24)
+    headline = ImageFont.truetype(font_bold, 62)
+    support = ImageFont.truetype(font_regular, 29)
+    cta = ImageFont.truetype(font_bold, 38)
+    footer = ImageFont.truetype(font_regular, 20)
 
     primary_rgb, secondary_rgb = _live_brand_colors()
     GREEN = (*primary_rgb, 255)
-    GREEN_DARK = (*tuple(max(0, int(v * 0.55)) for v in primary_rgb), 235)
-    WHITE = (248, 250, 249, 255)
-    MUTED = (204, 218, 210, 255)
-    BLACK = (*secondary_rgb, 238)
+    WHITE = (248, 251, 249, 255)
+    MUTED = (210, 222, 216, 255)
 
-    # Marca no topo.
-    draw.rounded_rectangle((58, 45, 1022, 170), radius=28, fill=(0, 0, 0, 145))
-    draw.text((92, 66), "RAGNAR", font=brand, fill=WHITE)
-    draw.text((522, 66), "ONE", font=brand_one, fill=GREEN)
-    draw.rounded_rectangle((818, 72, 982, 142), radius=22, fill=GREEN_DARK)
-    _draw_centered(draw, (818, 86, 982, 142), "PREMIUM", ImageFont.truetype(font_bold, 22), WHITE)
+    # Marca limpa: sem tarja gigante.
+    draw.text((62, 48), "RAGNAR", font=brand, fill=WHITE, stroke_width=2, stroke_fill=(0,0,0,130))
+    draw.text((300, 48), "ONE", font=brand, fill=GREEN, stroke_width=2, stroke_fill=(0,0,0,130))
 
-    # Badge.
-    badge_y = 622
-    draw.rounded_rectangle((74, badge_y, 560, badge_y + 68), radius=32, fill=BLACK, outline=GREEN, width=4)
-    draw.ellipse((101, badge_y + 20, 127, badge_y + 46), fill=GREEN)
-    draw.text((148, badge_y + 17), theme["kicker"], font=kicker, fill=WHITE)
+    # Kicker pequeno.
+    kicker_text = str(theme.get("kicker") or "RAGNAR ONE").upper()
+    kicker_w = draw.textbbox((0,0), kicker_text, font=kicker_font)[2]
+    pill = (62, 785, min(1010, 112 + kicker_w), 838)
+    draw.rounded_rectangle(pill, radius=24, fill=(4, 14, 10, 188), outline=GREEN, width=2)
+    draw.text((84, 800), kicker_text, font=kicker_font, fill=WHITE)
 
-    # Headline com verde em destaque.
-    y = 728
-    for idx, line in enumerate(_wrap_lines(draw, theme["headline"], headline, 900)):
-        fill = GREEN if idx == 1 or (idx == 0 and len(_wrap_lines(draw, theme["headline"], headline, 900)) == 1) else WHITE
-        draw.text((74, y), line, font=headline, fill=fill, stroke_width=2, stroke_fill=(0, 0, 0, 150))
+    # Headline forte, no máximo 2-3 linhas.
+    y = 868
+    lines = _wrap_lines(draw, theme["headline"], headline, 920)[:3]
+    for line in lines:
+        draw.text((62, y), line, font=headline, fill=WHITE, stroke_width=2, stroke_fill=(0,0,0,150))
         y += 72
 
-    y += 18
-    for line in _wrap_lines(draw, theme["support"], support, 900):
-        draw.text((76, y), line, font=support, fill=MUTED)
-        y += 43
+    # Apoio curto.
+    y += 10
+    for line in _wrap_lines(draw, theme["support"], support, 900)[:2]:
+        draw.text((64, y), line, font=support, fill=MUTED, stroke_width=1, stroke_fill=(0,0,0,110))
+        y += 42
 
-    # Benefícios visuais.
-    feature_y = 1040
-    features = [("TV", "JOGOS"), ("▶", "FILMES"), ("◎", "SÉRIES"), ("✓", "SUPORTE")]
-    x_positions = [82, 330, 572, 806]
-    small_bold = ImageFont.truetype(font_bold, 24)
-    for (icon, label), x in zip(features, x_positions):
-        draw.rounded_rectangle((x, feature_y, x + 64, feature_y + 64), radius=16, fill=(7, 35, 22, 220), outline=GREEN, width=3)
-        _draw_centered(draw, (x, feature_y + 16, x + 64, feature_y + 64), icon, ImageFont.truetype(font_bold, 22), GREEN)
-        draw.text((x + 76, feature_y + 18), label, font=small_bold, fill=WHITE)
-
-    # CTA.
-    cta_box = (76, 1148, 1004, 1265)
-    draw.rounded_rectangle(cta_box, radius=50, fill=GREEN, outline=(106, 255, 169, 255), width=3)
+    # CTA elegante, sem ocupar metade do criativo.
     profile = _posting_profile()
     cta_text = str(profile.get("cta") or 'Comente "QUERO" e saiba mais')
     short_cta = cta_text.replace('"', "").upper()
-    if len(short_cta) > 31:
-        short_cta = short_cta[:28].rstrip() + "..."
-    _draw_centered(draw, (cta_box[0], cta_box[1] + 28, cta_box[2], cta_box[3]), short_cta, cta, WHITE)
+    if len(short_cta) > 34:
+        short_cta = "COMENTE QUERO E SAIBA MAIS"
+    cta_box = (62, 1182, 1018, 1280)
+    draw.rounded_rectangle(cta_box, radius=32, fill=GREEN)
+    _draw_centered(draw, (cta_box[0], cta_box[1] + 24, cta_box[2], cta_box[3]), short_cta, cta, WHITE)
 
     cfg = _nexus_config()
     footer_text = str(cfg.get("instagram") or "@ragnarplay1")
-    draw.text((76, 1300), footer_text, font=footer, fill=WHITE)
+    draw.text((64, 1306), footer_text, font=footer, fill=(220, 232, 226, 210))
 
-    # Regra mínima de qualidade: nunca publicar um arquivo vazio/pequeno.
     img = img.convert("RGB")
     img.save(path, "PNG", optimize=True)
-    if not path.exists() or path.stat().st_size < 150000:
+    if not path.exists() or path.stat().st_size < 140000:
         try:
             path.unlink(missing_ok=True)
         except Exception:
