@@ -299,12 +299,18 @@ def process_one():
                     panel.get_setting("website", BRAND["website"]),
                     _whatsapp_url(),
                 )
-            message_id = _send_graph_message(recipient, outbound_text)
+            if not outbound_text:
+                message_id = None
+                status, error = "suppressed", "automation_loop_guard"
+            else:
+                message_id = _send_graph_message(recipient, outbound_text)
+                status, error = "sent", None
 
         else:
             raise ValueError("unsupported_kind")
 
-        status, error = "sent", None
+        if kind != "dm":
+            status, error = "sent", None
 
     except urllib.error.HTTPError as exc:
         status, error, message_id = "failed", f"HTTP_{exc.code}", None
