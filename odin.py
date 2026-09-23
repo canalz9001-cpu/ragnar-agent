@@ -265,7 +265,6 @@ def qualification_reply(connection, user_id, username, body, website, whatsapp_u
 
     loop_reason = automation_loop_reason(connection, user_id, body)
     if loop_reason:
-        _set_state(connection, user_id, stage="automation_suppressed")
         return None
 
     t = _normalize(body)
