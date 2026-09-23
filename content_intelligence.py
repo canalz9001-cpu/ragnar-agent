@@ -98,18 +98,20 @@ def _save(db_factory, kind, payload):
 def fallback_research():
     return {
         "signals": [
-            "A dor precisa aparecer nos primeiros segundos do vídeo.",
-            "Perguntas curtas favorecem identificação e comentários.",
-            "Cena cotidiana e contraste claro tornam a mensagem fácil de entender.",
+            "O primeiro segundo precisa mostrar entretenimento, movimento ou curiosidade visual.",
+            "Futebol, cinema em casa, maratona e escolha do que assistir geram identificação rápida.",
+            "Emoção positiva e cenas desejáveis dão mais espaço para compartilhamento do que sofrimento literal.",
+            "Variação de cenários e formatos ajuda a descobrir o que a própria audiência responde melhor.",
         ],
         "hooks": [
-            "Vai travar justo na melhor parte?",
-            "Você paga para assistir ou para esperar carregar?",
-            "Seu suporte responde quando você precisa?",
+            "Hoje tem jogo. Sua tela está pronta?",
+            "Seu sofá virou cinema.",
+            "Filme, série ou futebol: qual vai ser hoje?",
+            "Dê play no seu momento.",
         ],
-        "formats": ["problema e solução", "comparação antes e depois", "humor de identificação"],
-        "avoid": ["promessa de zero travamento", "métricas inventadas", "copiar criativos"],
-        "summary": "Gancho imediato, dor reconhecível, texto curto e CTA simples para comentar QUERO.",
+        "formats": ["momento aspiracional", "pergunta de escolha", "surpresa visual", "humor leve", "energia de jogo"],
+        "avoid": ["homem sofrendo", "pessoa triste ou desesperada", "antes triste/depois feliz", "promessa de zero travamento", "métricas inventadas", "copiar criativos"],
+        "summary": "Gancho imediato, desejo, curiosidade, entretenimento visual forte e CTA simples para comentar QUERO.",
     }
 
 
@@ -122,9 +124,11 @@ def research_trends(db_factory):
         memory = _latest(db_factory, "audit", 14 * 86400) or {}
         result = _parse_json(_openai(
             """Você pesquisa conteúdo público recente para a Ragnar One no Brasil.
-Pesquise sinais dos últimos 30 dias em Instagram e web sobre streaming, filmes, séries,
-futebol ao vivo, travamento, delay e suporte. Extraia mecanismos de atenção, retenção,
-comentários e compartilhamento; não copie posts, slogans ou identidade de terceiros.
+Pesquise sinais dos últimos 30 dias em Instagram e web sobre entretenimento, streaming, filmes, séries,
+futebol ao vivo, descoberta de conteúdo e comportamento de audiência. Extraia mecanismos de atenção,
+retenção, curiosidade, emoção positiva, comentários e compartilhamento; não copie posts, slogans ou identidade de terceiros.
+Problemas como travamento, delay e suporte podem ser usados apenas como contexto quando realmente ajudarem o gancho.
+Não recomende cenas de sofrimento, raiva, desespero ou comparação antes triste/depois feliz.
 Não invente métricas, não prometa viralização e não recomende pirataria.
 Retorne SOMENTE JSON válido com as chaves signals, hooks, formats, avoid e summary.""",
             "Crie aprendizados práticos para os próximos Reels da Ragnar One. "
@@ -183,8 +187,10 @@ def optimized_caption(db_factory, graph_request, account, base_caption):
     try:
         result = _parse_json(_openai(
             """Você é o redator da Ragnar One. Melhore a legenda de um Reel em português brasileiro.
-Use um gancho curto, linguagem natural, benefício sem alegações absolutas e CTA para comentar QUERO.
+Use um gancho curto, linguagem natural, energia positiva, benefício sem alegações absolutas e CTA para comentar QUERO.
+Priorize desejo, entretenimento, curiosidade e escolha; não dramatize sofrimento.
 Use no máximo 5 hashtags relevantes. Não mencione pesquisa, algoritmo ou concorrentes.
+PRESERVE EXATAMENTE qualquer linha de preços presente na legenda base; não altere valores, períodos nem moeda.
 Não invente preço, desempenho, catálogo, teste grátis ou garantia. Retorne SOMENTE JSON válido:
 {"caption":"...","reason":"..."}.""",
             "LEGENDA BASE:\n" + base_caption[:4000] +
