@@ -356,7 +356,7 @@ Retorne SOMENTE JSON válido: {"caption":"...","reason":"..."}.""",
         return base_caption
 
 
-def audit_visual_quality(image_path, headline, support):
+def audit_visual_quality(image_path, headline, support, kicker=""):
     """QA visual semelhante ao da Claire. Falha do QA não derruba a postagem."""
     try:
         raw = image_path.read_bytes()
@@ -364,14 +364,14 @@ def audit_visual_quality(image_path, headline, support):
         data_url = f"data:{mime};base64," + base64.b64encode(raw).decode("ascii")
         text = _openai_multimodal(
             """Você é o controle de qualidade visual da Ragnar One.
-Textos permitidos: RAGNAR ONE; a headline fornecida; a linha de apoio fornecida;
+Textos permitidos: RAGNAR ONE; o kicker fornecido; a headline fornecida; a linha de apoio fornecida;
 COMENTE QUERO E SAIBA MAIS; @ragnarplay1.
 Reprove se houver outro texto inesperado, inglês visível, texto ilegível/aleatório, composição amadora,
 headline pequena demais, excesso de informação, anatomia muito estranha ou aparência de card genérico.
 Aprove apenas se parecer anúncio premium e legível no celular.
 Retorne SOMENTE JSON: {"approved":true|false,"issues":["..."],"correction":"..."}.""",
             [
-                {"type": "input_text", "text": f"Headline esperada: {headline}\nApoio esperado: {support}"},
+                {"type": "input_text", "text": f"Kicker permitido: {kicker}\nHeadline esperada: {headline}\nApoio esperado: {support}"},
                 {"type": "input_image", "image_url": data_url},
             ],
         )
