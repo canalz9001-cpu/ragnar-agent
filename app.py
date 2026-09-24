@@ -1,4 +1,5 @@
 """Ragnar One: atendimento, publicação automática e Odin para qualificação de leads."""
+import base64
 import hashlib
 import hmac
 import json
@@ -412,6 +413,103 @@ def start_worker():
 start_worker()
 
 
+def _nexus_authorized(environ):
+    expected = env("NEXUS_AGENT_TOKEN")
+    provided = environ.get("HTTP_AUTHORIZATION", "")
+    return bool(
+        expected
+        and provided.startswith("Bearer ")
+        and hmac.compare_digest(provided[7:], expected)
+    )
+
+
+def _read_nexus_json(environ, max_bytes):
+    length = int(environ.get("CONTENT_LENGTH") or "0")
+    if length < 1 or length > max_bytes:
+        raise ValueError("invalid_size")
+    raw = environ["wsgi.input"].read(length)
+    payload = json.loads(raw.decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("invalid_payload")
+    return payload
+
+
+def _openai_json_request(path, payload, timeout=180):
+    api_key = env("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("openai_not_configured")
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/" + path.lstrip("/"),
+        data=data,
+        method="POST",
+        headers={
+            "Authorization": "Bearer " + api_key,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "Ragnar-NEXUS-Bridge/1.0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:1200]
+        raise RuntimeError("openai_http_" + str(exc.code) + ":" + detail) from exc
+
+
+def _openai_transcription_request(audio_bytes, filename="audio.mp3", timeout=600):
+    api_key = env("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("openai_not_configured")
+    boundary = "----RagnarNexus" + hashlib.sha256(
+        (str(time.time()) + filename).encode("utf-8")
+    ).hexdigest()[:24]
+    parts = []
+
+    def field(name, value):
+        parts.append(("--" + boundary + "\r\n").encode())
+        parts.append((
+            'Content-Disposition: form-data; name="' + name + '"\r\n\r\n'
+        ).encode())
+        parts.append(str(value).encode("utf-8"))
+        parts.append(b"\r\n")
+
+    field("model", "whisper-1")
+    field("response_format", "verbose_json")
+    field("timestamp_granularities[]", "segment")
+
+    parts.append(("--" + boundary + "\r\n").encode())
+    safe_name = re.sub(r'[^A-Za-z0-9._-]+', "_", filename or "audio.mp3")[:120]
+    parts.append((
+        'Content-Disposition: form-data; name="file"; filename="' + safe_name + '"\r\n'
+        "Content-Type: audio/mpeg\r\n\r\n"
+    ).encode())
+    parts.append(audio_bytes)
+    parts.append(b"\r\n")
+    parts.append(("--" + boundary + "--\r\n").encode())
+    body = b"".join(parts)
+
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/audio/transcriptions",
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": "Bearer " + api_key,
+            "Content-Type": "multipart/form-data; boundary=" + boundary,
+            "Accept": "application/json",
+            "User-Agent": "Ragnar-NEXUS-Bridge/1.0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:1200]
+        raise RuntimeError("openai_transcription_http_" + str(exc.code) + ":" + detail) from exc
+
+
+
 def application(environ, start_response):
     def reply(code, data, content_type="application/json"):
         body = (
@@ -428,6 +526,52 @@ def application(environ, start_response):
 
     path = environ.get("PATH_INFO", "")
     method = environ.get("REQUEST_METHOD", "GET")
+
+    if path == "/nexus/openai/responses" and method == "POST":
+        if not _nexus_authorized(environ):
+            return reply("401 Unauthorized", {"error": "unauthorized"})
+        try:
+            payload = _read_nexus_json(environ, 512 * 1024)
+            model = env("OPENAI_MODEL") or "gpt-5.6-luna"
+            allowed = {
+                "model": model,
+                "input": payload.get("input", ""),
+                "max_output_tokens": min(6000, max(64, int(payload.get("max_output_tokens") or 1200))),
+            }
+            if payload.get("instructions"):
+                allowed["instructions"] = str(payload.get("instructions"))[:16000]
+            result = _openai_json_request("responses", allowed, timeout=180)
+            return reply("200 OK", result)
+        except ValueError as exc:
+            code = "413 Payload Too Large" if str(exc) == "invalid_size" else "400 Bad Request"
+            return reply(code, {"error": str(exc)})
+        except Exception as exc:
+            LOG.exception("nexus_openai_responses_failed")
+            return reply("502 Bad Gateway", {"error": "openai_bridge_failed", "detail": str(exc)[:300]})
+
+    if path == "/nexus/openai/transcriptions" and method == "POST":
+        if not _nexus_authorized(environ):
+            return reply("401 Unauthorized", {"error": "unauthorized"})
+        try:
+            payload = _read_nexus_json(environ, 38 * 1024 * 1024)
+            encoded = str(payload.get("audio_base64") or "")
+            if not encoded:
+                return reply("400 Bad Request", {"error": "audio_required"})
+            audio = base64.b64decode(encoded, validate=True)
+            if not audio or len(audio) > 25 * 1024 * 1024:
+                return reply("413 Payload Too Large", {"error": "audio_too_large"})
+            result = _openai_transcription_request(
+                audio,
+                str(payload.get("filename") or "audio.mp3")[:120],
+                timeout=600,
+            )
+            return reply("200 OK", result)
+        except ValueError as exc:
+            code = "413 Payload Too Large" if str(exc) == "invalid_size" else "400 Bad Request"
+            return reply(code, {"error": str(exc)})
+        except Exception as exc:
+            LOG.exception("nexus_openai_transcription_failed")
+            return reply("502 Bad Gateway", {"error": "openai_bridge_failed", "detail": str(exc)[:300]})
 
     if path == "/nexus/status" and method == "GET":
         expected = env("NEXUS_AGENT_TOKEN")
