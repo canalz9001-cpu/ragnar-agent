@@ -1466,12 +1466,11 @@ def _ragnar_price_line():
 def _scheduled_caption(slot):
     theme = _scheduled_theme(slot)
     profile = _posting_profile()
-    cta = str(profile.get("cta") or 'Comente "QUERO" e saiba mais')
-    hashtags = str(profile.get("hashtags") or "#RagnarOne #Streaming #Entretenimento")
+    cta = "Siga @ragnarplay1 para acompanhar os próximos conteúdos e envie este post para alguém que vai gostar."
+    hashtags = str(profile.get("hashtags") or "#RagnarOne #Streaming #Entretenimento #FilmesESeries #Futebol")
     base = (
         theme["headline"] + "\n\n"
         + theme["support"] + "\n\n"
-        + _ragnar_price_line() + "\n\n"
         + cta + "\n\n"
         + hashtags
     )
