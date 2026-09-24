@@ -47,7 +47,7 @@ DEFAULTS = {
         "evitar card genérico e buscar ação, curiosidade, emoção positiva e leitura imediata no celular."
     ),
     "posts_per_day": "3",
-    "post_times": "09:00, 12:00, 18:00",
+    "post_times": "09:00, 14:00, 20:00",
     "reel_caption": (
         "Chega de perder os melhores momentos por causa de travamentos.\\n\\n"
         'Digite "QUERO" abaixo para saber mais\\n\\n'
@@ -481,7 +481,7 @@ def _dashboard(notice=""):
 <section class="card">
 <h3>Publicação</h3><span class="status">APROVAÇÃO OBRIGATÓRIA</span>
 <div class="metric">{html.escape(s['posts_per_day'])} posts/dia</div>
-<p class="small">Horários: {html.escape(s['post_times'])}</p>
+<p class="small">Horários adaptativos hoje: {html.escape(", ".join(f"{h:02d}:{m:02d}" for h, m in _schedule_times()))}</p>
 <p class="small">Nenhum vídeo é publicado antes de clicar em <strong>Aprovar e postar</strong>.</p>
 </section>
 </div>
@@ -502,8 +502,9 @@ def _dashboard(notice=""):
 <form method="post" action="/panel/settings">
 <label>Postagens por dia</label>
 <input name="posts_per_day" type="number" min="1" max="10" value="{html.escape(s['posts_per_day'])}">
-<label>Horários</label>
-<input name="post_times" value="{html.escape(s['post_times'])}" placeholder="09:00, 15:00, 21:00">
+<label>Horários de fallback</label>
+<input name="post_times" value="{html.escape(s['post_times'])}" placeholder="09:00, 14:00, 20:00">
+<p class="small">Com horário adaptativo ativo, o Ragnar escolhe 3 horários por dia usando o desempenho real da conta.</p>
 <label>Frase obrigatória nos banners e cortes</label>
 <input name="banner_cta" value="{html.escape(s['banner_cta'])}">
 <label>Legenda padrão dos cortes</label>
@@ -1917,12 +1918,63 @@ def _content_brief_for_slot(slot):
 
 def _schedule_times():
     """
-    Agenda autoritativa local do Ragnar.
-
-    Igual ao modelo da Claire: os horários vêm da configuração do próprio
-    serviço. O NEXUS pode orientar conteúdo, mas não pode apagar um horário
-    de postagem por falha ou configuração remota.
+    Escolhe exatamente 3 horários por dia. A agenda adaptativa é calculada
+    com o desempenho histórico da própria conta e congelada durante o dia.
     """
+    def parse_times(values):
+        parsed = []
+        seen = set()
+        for value in values:
+            match = re.fullmatch(r"([01]\d|2[0-3]):([0-5]\d)", str(value).strip())
+            if not match:
+                continue
+            item = (int(match.group(1)), int(match.group(2)))
+            if item not in seen:
+                seen.add(item)
+                parsed.append(item)
+        return sorted(parsed)
+
+    adaptive_enabled = env("ADAPTIVE_POST_TIMES").lower() not in {"0", "false", "no", "off"}
+    day_key = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%Y%m%d")
+    adaptive_key = f"adaptive_post_times_{day_key}"
+
+    if adaptive_enabled:
+        try:
+            with settings_db() as c:
+                row = c.execute("SELECT value FROM settings WHERE key=?", (adaptive_key,)).fetchone()
+            if row and row[0]:
+                cached_raw = json.loads(row[0])
+                cached = parse_times(cached_raw if isinstance(cached_raw, list) else [])
+                if len(cached) == 3:
+                    return cached
+        except Exception:
+            LOG.warning("adaptive_schedule_cache_read_failed", exc_info=True)
+
+        try:
+            account = env("INSTAGRAM_ACCOUNT_ID")
+            audit = content_intelligence.audit_own_instagram(
+                settings_db, _graph_request, account, force=False
+            ) if account else {}
+            adaptive = parse_times(audit.get("best_post_times") or [])
+            if len(adaptive) == 3:
+                now_ts = time.time()
+                with settings_db() as c:
+                    c.execute(
+                        "INSERT INTO settings(key,value,updated) VALUES(?,?,?) "
+                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated=excluded.updated",
+                        (adaptive_key, json.dumps([f"{h:02d}:{m:02d}" for h, m in adaptive]), now_ts),
+                    )
+                print(
+                    "ADAPTIVE_POST_SCHEDULE day="
+                    + day_key
+                    + " hours="
+                    + ",".join(f"{h:02d}:{m:02d}" for h, m in adaptive),
+                    flush=True,
+                )
+                return adaptive
+        except Exception:
+            LOG.warning("adaptive_schedule_learning_failed", exc_info=True)
+
     raw = []
     explicit_times = env("AUTO_POST_TIMES")
     explicit_hours = env("AUTO_POST_HOURS")
@@ -1943,18 +1995,10 @@ def _schedule_times():
     else:
         raw = [x.strip() for x in str(get_setting("post_times", DEFAULTS["post_times"])).split(",")]
 
-    parsed = []
-    seen = set()
-    for value in raw:
-        match = re.fullmatch(r"([01]\d|2[0-3]):([0-5]\d)", str(value).strip())
-        if not match:
-            continue
-        item = (int(match.group(1)), int(match.group(2)))
-        if item not in seen:
-            seen.add(item)
-            parsed.append(item)
-
-    return sorted(parsed)[:6] or [(9, 0), (12, 0), (18, 0)]
+    fallback = parse_times(raw)
+    if len(fallback) < 3:
+        fallback = [(9, 0), (14, 0), (20, 0)]
+    return fallback[:3]
 
 def process_scheduled_posts_once():
     if env("AUTOMATION_ENABLED").lower() != "true":
@@ -1964,6 +2008,14 @@ def process_scheduled_posts_once():
         return
 
     now = datetime.now(ZoneInfo("America/Sao_Paulo"))
+    with settings_db() as c:
+        completed_today = c.execute(
+            "SELECT COUNT(*) FROM settings WHERE key LIKE ? AND value <> ''",
+            (f"schedule_image_done_{now:%Y%m%d}_%",),
+        ).fetchone()
+    if completed_today and int(completed_today[0] or 0) >= 3:
+        return
+
     due = []
     for hh, mm in times:
         slot = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
