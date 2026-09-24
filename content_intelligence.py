@@ -215,12 +215,20 @@ def audit_own_instagram(db_factory, graph_request, account, force=False):
         cached = _latest(db_factory, "audit", 4 * 3600)
         if cached:
             return cached
+
+    def median(values):
+        clean = sorted(float(x) for x in values if x is not None)
+        if not clean:
+            return 0.0
+        middle = len(clean) // 2
+        return clean[middle] if len(clean) % 2 else (clean[middle - 1] + clean[middle]) / 2.0
+
     try:
         result = graph_request(
             f"{account}/media?fields=id,caption,media_type,timestamp,like_count,comments_count&limit=20"
         )
         rows = []
-        for item in (result.get("data") or [])[:12]:
+        for item in (result.get("data") or [])[:16]:
             media_id = str(item.get("id") or "")
             likes = int(item.get("like_count") or 0)
             comments = int(item.get("comments_count") or 0)
@@ -229,25 +237,99 @@ def audit_own_instagram(db_factory, graph_request, account, force=False):
             shares = _insight_metric(graph_request, media_id, "shares") if media_id else None
             weighted = likes + comments * 2 + (saved or 0) * 3 + (shares or 0) * 4
             score = weighted / reach if reach and reach > 0 else weighted
+
+            timestamp_text = str(item.get("timestamp") or "")
+            reach_velocity = None
+            timestamp_epoch = 0.0
+            if timestamp_text:
+                try:
+                    from datetime import datetime
+                    timestamp_epoch = datetime.fromisoformat(timestamp_text.replace("Z", "+00:00")).timestamp()
+                    age_hours = max(0.0, (time.time() - timestamp_epoch) / 3600.0)
+                    if reach and reach > 0 and age_hours >= 3:
+                        reach_velocity = float(reach) / max(3.0, min(age_hours, 72.0))
+                except (TypeError, ValueError):
+                    timestamp_epoch = 0.0
+
             rows.append({
                 "caption": str(item.get("caption") or "")[:500],
                 "media_type": str(item.get("media_type") or ""),
+                "timestamp": timestamp_text,
+                "timestamp_epoch": timestamp_epoch,
                 "likes": likes,
                 "comments": comments,
                 "reach": reach,
                 "saved": saved,
                 "shares": shares,
                 "score": score,
+                "reach_velocity": reach_velocity,
             })
-        rows.sort(key=lambda row: row["score"], reverse=True)
+
+        median_reach = median([row["reach"] for row in rows if row.get("reach") and row["reach"] > 0])
+        reliable_floor = max(20.0, median_reach * 0.75)
+        reliable = [row for row in rows if float(row.get("reach") or 0) >= reliable_floor]
+        ranking_pool = reliable or rows
+        top_posts = sorted(ranking_pool, key=lambda row: row["score"], reverse=True)[:4]
+        weak_posts = sorted(ranking_pool, key=lambda row: row["score"])[:3]
+
+        format_values = {}
+        for row in rows:
+            velocity = row.get("reach_velocity")
+            if velocity is None:
+                continue
+            key = str(row.get("media_type") or "POST").upper()
+            format_values.setdefault(key, []).append(float(velocity))
+        format_stats = sorted(
+            [
+                {"format": key, "median_reach_velocity": median(values), "posts": len(values)}
+                for key, values in format_values.items()
+            ],
+            key=lambda item: item["median_reach_velocity"],
+            reverse=True,
+        )
+        if (
+            len(format_stats) >= 2
+            and format_stats[0]["median_reach_velocity"] > format_stats[1]["median_reach_velocity"] * 1.3
+        ):
+            format_signal = (
+                format_stats[0]["format"] + " está distribuindo mais rápido que "
+                + format_stats[1]["format"]
+                + " após ajuste pela idade dos posts. Reaproveite o mecanismo do formato vencedor "
+                  "e evite repetição visual."
+            )
+        else:
+            format_signal = "Não há diferença forte e confiável entre formatos nesta amostra."
+
+        ordered = sorted(
+            [row for row in rows if row.get("reach_velocity") is not None and row.get("timestamp_epoch")],
+            key=lambda row: row["timestamp_epoch"],
+            reverse=True,
+        )
+        half = min(6, len(ordered) // 2)
+        recent_velocity = median([row["reach_velocity"] for row in ordered[:half]]) if half >= 3 else 0.0
+        prior_velocity = median([row["reach_velocity"] for row in ordered[half:half * 2]]) if half >= 3 else 0.0
+        trend_ratio = recent_velocity / prior_velocity if prior_velocity > 0 else None
+        if trend_ratio is not None and trend_ratio < 0.7:
+            trend_signal = (
+                "A velocidade de alcance recente caiu mesmo após ajuste pela idade dos posts; "
+                "variar gancho, tema e composição visual é prioridade."
+            )
+        else:
+            trend_signal = "A velocidade de alcance recente não mostra queda forte após ajuste pela idade dos posts."
+
         audit = {
             "available": bool(rows),
             "sample_size": len(rows),
-            "top_posts": rows[:4],
-            "weak_posts": rows[-3:] if rows else [],
+            "top_posts": top_posts,
+            "weak_posts": weak_posts,
+            "format_stats": format_stats,
+            "format_signal": format_signal,
+            "trend_signal": trend_signal,
+            "trend_ratio": round(trend_ratio, 2) if trend_ratio is not None else None,
             "summary": (
-                "Use os melhores sinais da própria conta como referência, principalmente comentários, salvamentos "
-                "e compartilhamentos quando disponíveis. Teste variações; não trate correlação como garantia."
+                format_signal + " " + trend_signal
+                + " Ignore taxas chamativas em posts com alcance minúsculo; "
+                  "use padrões com amostra suficiente e teste variações."
                 if rows else "Ainda não há amostra própria suficiente."
             ),
         }
@@ -257,6 +339,7 @@ def audit_own_instagram(db_factory, graph_request, account, force=False):
             "sample_size": 0,
             "top_posts": [],
             "weak_posts": [],
+            "format_stats": [],
             "error": str(exc)[:400],
             "summary": "Auditoria própria indisponível nesta rodada.",
         }
