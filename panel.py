@@ -1920,6 +1920,10 @@ def _schedule_times():
     """
     Escolhe exatamente 3 horários por dia. A agenda adaptativa é calculada
     com o desempenho histórico da própria conta e congelada durante o dia.
+
+    Em 24/09/2026 existe uma janela de recuperação deliberada: 09:00, 12:00 e
+    16:00 no horário de São Paulo. Este override fica aqui no scheduler real,
+    sem depender de sitecustomize ou variável de ambiente.
     """
     def parse_times(values):
         parsed = []
@@ -1934,8 +1938,17 @@ def _schedule_times():
                 parsed.append(item)
         return sorted(parsed)
 
+    local_now = datetime.now(ZoneInfo("America/Sao_Paulo"))
+    local_day = local_now.strftime("%Y-%m-%d")
+    day_key = local_now.strftime("%Y%m%d")
+
+    # Recuperação controlada do dia 24/09: o horário das 09:00 deve ser
+    # recuperado imediatamente após um restart/deploy se ainda não foi marcado
+    # como publicado. Os próximos slots ficam fixos em 12:00 e 16:00.
+    if local_day == "2026-09-24":
+        return [(9, 0), (12, 0), (16, 0)]
+
     adaptive_enabled = env("ADAPTIVE_POST_TIMES").lower() not in {"0", "false", "no", "off"}
-    day_key = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%Y%m%d")
     adaptive_key = f"adaptive_post_times_{day_key}"
 
     if adaptive_enabled:
@@ -2063,7 +2076,12 @@ def process_scheduled_posts_once():
             (attempt_key, str(now_ts), now_ts),
         )
 
-    print(f"SCHEDULE_IMAGE_ATTEMPT slot={slot:%Y-%m-%d_%H:%M}", flush=True)
+    delay_seconds = max(0, int((now - slot).total_seconds()))
+    print(
+        f"SCHEDULE_IMAGE_ATTEMPT slot={slot:%Y-%m-%d_%H:%M} delay_seconds={delay_seconds} "
+        f"schedule={','.join(f'{h:02d}:{m:02d}' for h, m in times)}",
+        flush=True,
+    )
     _nexus_post_event(slot, "generating")
     try:
         media_id = _publish_scheduled_image(slot)
