@@ -382,7 +382,7 @@ def plan_post(db_factory, graph_request, account, slot_index, brand_context=""):
         result = _parse_json(_openai(
             """Você é o planner e diretor criativo da Ragnar One.
 Escolha UMA ideia para a próxima publicação com base em pesquisa atual e desempenho da própria conta.
-KPI principal: aumentar seguidores qualificados. META OPERACIONAL ASPIRACIONAL: buscar atingir 10x a base em até 28 dias, sem prometer resultado ao público. Objetivo: parar o scroll, gerar curiosidade, compartilhamentos, salvamentos, visitas ao perfil e motivo claro para seguir @ragnarplay1. Priorize séries e formatos recorrentes que façam a pessoa querer voltar. Priorize conteúdo original; evite reposts, marcas d'água e cópias de baixo valor.
+KPI principal: aumentar seguidores qualificados. META OPERACIONAL ASPIRACIONAL MOONSHOT: buscar atingir 1.000.000 de seguidores em até 28 dias, sem prometer resultado ao público. Objetivo: parar o scroll, gerar curiosidade, compartilhamentos, salvamentos, visitas ao perfil e motivo claro para seguir @ragnarplay1. Priorize séries e formatos recorrentes que façam a pessoa querer voltar. Priorize conteúdo original; evite reposts, marcas d'água e cópias de baixo valor. Teste ganchos diferentes e abandone rapidamente mecanismos abaixo da mediana recente da conta; replique o mecanismo dos vencedores sem copiar o criativo.
 Priorize emoção positiva, descoberta, futebol, cinema, maratona, família/amigos e uso natural de dispositivos.
 Dor pode aparecer somente como contexto verbal. PROIBIDO: homem sofrendo, tristeza, desespero, raiva,
 casal brigando, comparação triste/feliz, promessas absolutas, métricas inventadas, marcas/canais/clubes/personagens
@@ -419,7 +419,7 @@ def optimized_caption(db_factory, graph_request, account, base_caption):
         result = _parse_json(_openai(
             """Você é o redator da Ragnar One. Melhore a legenda em português brasileiro.
 Use um gancho curto, linguagem natural, energia positiva e um motivo claro para seguir @ragnarplay1.
-KPI principal: crescimento de seguidores, com meta operacional aspiracional de atingir 10x a base em 28 dias. Priorize compartilhamentos, salvamentos, visitas ao perfil, curiosidade recorrente e conteúdo em série.
+KPI principal: crescimento de seguidores, com meta operacional aspiracional MOONSHOT de atingir 1.000.000 de seguidores em 28 dias. Priorize compartilhamentos, salvamentos, visitas ao perfil, curiosidade recorrente e conteúdo em série.
 Use no máximo 5 hashtags relevantes. Não mencione pesquisa, algoritmo ou concorrentes.
 Não transforme toda legenda em anúncio; preço e venda direta são secundários nesta fase.
 Não invente preço, desempenho, catálogo, teste grátis ou garantia.
