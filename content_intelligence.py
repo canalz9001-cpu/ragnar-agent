@@ -8,6 +8,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 
 def _env(name, default=""):
@@ -317,6 +319,93 @@ def audit_own_instagram(db_factory, graph_request, account, force=False):
         else:
             trend_signal = "A velocidade de alcance recente não mostra queda forte após ajuste pela idade dos posts."
 
+        # Aprende os melhores horários usando alcance ajustado pela idade + ações
+        # de alto valor. Enquanto houver poucos horários testados, mantém um slot
+        # de exploração para descobrir janelas melhores do que a agenda antiga.
+        hour_values = {}
+        hour_counts = {}
+        for row in rows:
+            timestamp_text = str(row.get("timestamp") or "")
+            if not timestamp_text:
+                continue
+            try:
+                published = datetime.fromisoformat(timestamp_text.replace("Z", "+00:00")).astimezone(
+                    ZoneInfo("America/Sao_Paulo")
+                )
+                hour = int(published.hour)
+            except (TypeError, ValueError):
+                continue
+            if hour < 6 or hour > 23:
+                continue
+            velocity = row.get("reach_velocity")
+            distribution = float(velocity) if velocity is not None else float(row.get("reach") or 0) / 72.0
+            timing_score = (
+                distribution
+                + float(row.get("shares") or 0) * 1.6
+                + float(row.get("saved") or 0) * 1.2
+                + float(row.get("comments") or 0) * 0.35
+                + float(row.get("likes") or 0) * 0.08
+            )
+            hour_values.setdefault(hour, []).append(timing_score)
+            hour_counts[hour] = hour_counts.get(hour, 0) + 1
+
+        hour_stats = sorted(
+            [
+                {"hour": hour, "score": median(values), "posts": hour_counts.get(hour, len(values))}
+                for hour, values in hour_values.items()
+            ],
+            key=lambda item: (-item["score"], -item["posts"], item["hour"]),
+        )
+
+        selected_hours = []
+        def can_use_hour(hour):
+            return all(abs(int(hour) - int(current)) >= 4 for current in selected_hours)
+
+        exploit_limit = 3 if len(hour_stats) >= 6 else 2
+        for item in hour_stats:
+            if len(selected_hours) >= exploit_limit:
+                break
+            hour = int(item["hour"])
+            if can_use_hour(hour):
+                selected_hours.append(hour)
+
+        if len(selected_hours) < 3:
+            tested = {int(item["hour"]) for item in hour_stats}
+            day_key = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%Y-%m-%d")
+            seed = sum(ord(char) for char in day_key)
+            exploration = []
+            for hour in range(7, 23):
+                if not can_use_hour(hour):
+                    continue
+                if hour_stats:
+                    modeled = max(
+                        float(item["score"]) * (0.82 ** abs(int(item["hour"]) - hour))
+                        for item in hour_stats
+                    )
+                    top_score = float(hour_stats[0]["score"] or 1)
+                else:
+                    modeled = 0.0
+                    top_score = 1.0
+                novelty = 0.0 if hour in tested else max(0.05, top_score * 0.08)
+                tie_breaker = ((seed + hour * 17) % 13) / 10000.0
+                exploration.append((modeled + novelty + tie_breaker, hour))
+            for _, hour in sorted(exploration, reverse=True):
+                if len(selected_hours) >= 3:
+                    break
+                if can_use_hour(hour):
+                    selected_hours.append(hour)
+
+        for hour in [9, 14, 20, 8, 13, 18, 22]:
+            if len(selected_hours) >= 3:
+                break
+            if can_use_hour(hour):
+                selected_hours.append(hour)
+
+        selected_hours = sorted(selected_hours[:3])
+        if len(selected_hours) != 3:
+            selected_hours = [9, 14, 20]
+        best_post_times = [f"{hour:02d}:00" for hour in selected_hours]
+
         audit = {
             "available": bool(rows),
             "sample_size": len(rows),
@@ -326,6 +415,8 @@ def audit_own_instagram(db_factory, graph_request, account, force=False):
             "format_signal": format_signal,
             "trend_signal": trend_signal,
             "trend_ratio": round(trend_ratio, 2) if trend_ratio is not None else None,
+            "best_post_times": best_post_times,
+            "hour_stats": hour_stats[:10],
             "summary": (
                 format_signal + " " + trend_signal
                 + " Ignore taxas chamativas em posts com alcance minúsculo; "
@@ -340,6 +431,8 @@ def audit_own_instagram(db_factory, graph_request, account, force=False):
             "top_posts": [],
             "weak_posts": [],
             "format_stats": [],
+            "best_post_times": ["09:00", "14:00", "20:00"],
+            "hour_stats": [],
             "error": str(exc)[:400],
             "summary": "Auditoria própria indisponível nesta rodada.",
         }
