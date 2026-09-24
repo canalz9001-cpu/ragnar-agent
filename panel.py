@@ -1403,10 +1403,8 @@ def _create_scheduled_post_image(slot):
             y += 42
 
         profile = _posting_profile()
-        cta_text = str(profile.get("cta") or 'Comente "QUERO" e saiba mais')
-        short_cta = cta_text.replace('"', "").upper()
-        if len(short_cta) > 34:
-            short_cta = "COMENTE QUERO E SAIBA MAIS"
+        cta_text = "SIGA @RAGNARPLAY1"
+        short_cta = cta_text.upper()
         cta_box = (62, 1182, 1018, 1280)
         draw.rounded_rectangle(cta_box, radius=32, fill=GREEN)
         _draw_centered(draw, (cta_box[0], cta_box[1] + 24, cta_box[2], cta_box[3]), short_cta, cta, WHITE)
