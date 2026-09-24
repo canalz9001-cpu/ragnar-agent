@@ -423,6 +423,107 @@ def _nexus_authorized(environ):
     )
 
 
+
+def _nexus_insight_value(payload, metric):
+    for row in payload.get("data") or []:
+        if str(row.get("name") or "") != metric:
+            continue
+        values = row.get("values") or []
+        raw = values[0].get("value") if values and isinstance(values[0], dict) else None
+        if raw is None and isinstance(row.get("total_value"), dict):
+            raw = row["total_value"].get("value")
+        try:
+            return float(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _nexus_instagram_snapshot(limit=25):
+    account = env("INSTAGRAM_ACCOUNT_ID")
+    if not account or not env("INSTAGRAM_ACCESS_TOKEN") or not env("META_API_VERSION"):
+        raise RuntimeError("instagram_not_configured")
+
+    safe_limit = max(1, min(25, int(limit or 25)))
+    profile_error = ""
+    username = ""
+    followers_count = 0
+    media_count = 0
+    try:
+        profile = panel._graph_request(
+            f"{account}?fields=username,followers_count,media_count",
+            "GET",
+        )
+        username = str(profile.get("username") or "")
+        followers_count = max(0, int(profile.get("followers_count") or 0))
+        media_count = max(0, int(profile.get("media_count") or 0))
+    except Exception as exc:
+        profile_error = str(exc)[:240]
+
+    media = panel._graph_request(
+        f"{account}/media?fields=id,caption,media_type,timestamp,like_count,comments_count,permalink&limit={safe_limit}",
+        "GET",
+    )
+    items = []
+    insight_errors = []
+    metric_sets = (
+        "reach,views,shares,total_interactions,saved",
+        "reach,views,shares,total_interactions",
+        "reach,views",
+        "reach",
+    )
+
+    for raw_item in media.get("data") or []:
+        media_id = str(raw_item.get("id") or "")
+        insight = {}
+        last_error = ""
+        used_metrics = []
+        if media_id:
+            for metrics in metric_sets:
+                try:
+                    payload = panel._graph_request(
+                        f"{media_id}/insights?metric={urllib.parse.quote(metrics)}",
+                        "GET",
+                    )
+                    insight = payload
+                    used_metrics = metrics.split(",")
+                    last_error = ""
+                    break
+                except Exception as exc:
+                    last_error = str(exc)[:240]
+
+        item = {
+            "id": media_id,
+            "caption": str(raw_item.get("caption") or "")[:2200],
+            "timestamp": raw_item.get("timestamp"),
+            "mediaType": str(raw_item.get("media_type") or ""),
+            "likeCount": max(0, int(raw_item.get("like_count") or 0)),
+            "commentsCount": max(0, int(raw_item.get("comments_count") or 0)),
+            "permalink": str(raw_item.get("permalink") or ""),
+            "reach": _nexus_insight_value(insight, "reach"),
+            "views": _nexus_insight_value(insight, "views"),
+            "saved": _nexus_insight_value(insight, "saved"),
+            "shares": _nexus_insight_value(insight, "shares"),
+            "totalInteractions": _nexus_insight_value(insight, "total_interactions"),
+            "insightMetrics": used_metrics,
+            "insightError": last_error,
+        }
+        if last_error:
+            insight_errors.append({"id": media_id, "error": last_error})
+        items.append(item)
+
+    return {
+        "ok": True,
+        "source": "ragnar-instagram-api",
+        "username": username,
+        "followersCount": followers_count,
+        "mediaCount": media_count,
+        "items": items,
+        "insightErrors": insight_errors[:10],
+        "profileError": profile_error,
+    }
+
+
 def _read_nexus_json(environ, max_bytes):
     length = int(environ.get("CONTENT_LENGTH") or "0")
     if length < 1 or length > max_bytes:
@@ -572,6 +673,18 @@ def application(environ, start_response):
         except Exception as exc:
             LOG.exception("nexus_openai_transcription_failed")
             return reply("502 Bad Gateway", {"error": "openai_bridge_failed", "detail": str(exc)[:300]})
+
+    if path == "/nexus/instagram/insights" and method == "GET":
+        if not _nexus_authorized(environ):
+            return reply("401 Unauthorized", {"error": "unauthorized"})
+        try:
+            return reply("200 OK", _nexus_instagram_snapshot(25))
+        except Exception as exc:
+            LOG.exception("nexus_instagram_insights_failed")
+            return reply(
+                "502 Bad Gateway",
+                {"error": "instagram_insights_unavailable", "detail": str(exc)[:300]},
+            )
 
     if path == "/nexus/status" and method == "GET":
         expected = env("NEXUS_AGENT_TOKEN")
