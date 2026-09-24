@@ -155,7 +155,7 @@ def fallback_research():
             "métricas inventadas",
             "copiar criativos",
         ],
-        "summary": "Gancho imediato, desejo, curiosidade, entretenimento visual forte e CTA simples para comentar QUERO.",
+        "summary": "Gancho imediato, desejo, curiosidade e conteúdo compartilhável que gere visitas ao perfil e novos seguidores.",
     }
 
 
@@ -382,7 +382,7 @@ def plan_post(db_factory, graph_request, account, slot_index, brand_context=""):
         result = _parse_json(_openai(
             """Você é o planner e diretor criativo da Ragnar One.
 Escolha UMA ideia para a próxima publicação com base em pesquisa atual e desempenho da própria conta.
-Objetivo: parar o scroll, gerar curiosidade, desejo de entretenimento, comentários e visitas.
+KPI principal: aumentar seguidores qualificados. Objetivo: parar o scroll, gerar curiosidade, compartilhamentos, salvamentos, visitas ao perfil e motivo claro para seguir @ragnarplay1.
 Priorize emoção positiva, descoberta, futebol, cinema, maratona, família/amigos e uso natural de dispositivos.
 Dor pode aparecer somente como contexto verbal. PROIBIDO: homem sofrendo, tristeza, desespero, raiva,
 casal brigando, comparação triste/feliz, promessas absolutas, métricas inventadas, marcas/canais/clubes/personagens
@@ -418,19 +418,20 @@ def optimized_caption(db_factory, graph_request, account, base_caption):
     try:
         result = _parse_json(_openai(
             """Você é o redator da Ragnar One. Melhore a legenda em português brasileiro.
-Use um gancho curto, linguagem natural, energia positiva, benefício sem alegações absolutas e CTA para comentar QUERO.
-Priorize desejo, entretenimento, curiosidade e escolha; não dramatize sofrimento.
+Use um gancho curto, linguagem natural, energia positiva e um motivo claro para seguir @ragnarplay1.
+KPI principal: crescimento de seguidores. Priorize compartilhamentos, salvamentos, visitas ao perfil, curiosidade recorrente e conteúdo em série.
 Use no máximo 5 hashtags relevantes. Não mencione pesquisa, algoritmo ou concorrentes.
-PRESERVE EXATAMENTE qualquer linha de preços presente na legenda base; não altere valores, períodos nem moeda.
+Não transforme toda legenda em anúncio; preço e venda direta são secundários nesta fase.
 Não invente preço, desempenho, catálogo, teste grátis ou garantia.
+Finalize com CTA natural para seguir o perfil e, quando fizer sentido, salvar ou compartilhar.
 Retorne SOMENTE JSON válido: {"caption":"...","reason":"..."}.""",
             "LEGENDA BASE:\n" + base_caption[:4000]
             + "\n\nTENDÊNCIAS:\n" + json.dumps(research, ensure_ascii=False)[:7000]
             + "\n\nDESEMPENHO PRÓPRIO:\n" + json.dumps(audit, ensure_ascii=False)[:7000],
         ))
         caption = str(result.get("caption") or "").strip()
-        if not caption or "quero" not in caption.lower():
-            raise ValueError("Legenda gerada sem CTA QUERO")
+        if not caption or ("siga" not in caption.lower() and "@ragnarplay1" not in caption.lower()):
+            raise ValueError("Legenda gerada sem CTA de crescimento")
         learning = {"caption": caption, "reason": str(result.get("reason") or "")[:700]}
         _save(db_factory, "caption", learning)
         return caption
