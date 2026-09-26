@@ -480,6 +480,11 @@ Priorize emoção positiva, descoberta, futebol, cinema, maratona, família/amig
 Dor pode aparecer somente como contexto verbal. PROIBIDO: homem sofrendo, tristeza, desespero, raiva,
 casal brigando, comparação triste/feliz, promessas absolutas, métricas inventadas, marcas/canais/clubes/personagens
 de terceiros e inglês visível no criativo final.
+CLAREZA OBRIGATÓRIA: o público deve entender a arte em até 2 segundos sem precisar ler a legenda.
+Se houver pergunta/enquete/escolha, mostre todas as opções explicitamente na arte e use os mesmos nomes no CTA.
+É PROIBIDO pedir "1, 2 ou 3" sem mostrar claramente o significado de cada número. Prefira palavras como FILME, SÉRIE ou FUTEBOL.
+Evite TV/tela vazia como elemento principal: a cena deve comunicar imediatamente entretenimento, futebol, cinema, série ou convivência.
+Uma pergunta = opções claras = uma única ação. Se a ideia depender de adivinhação, simplifique antes de retornar.
 A headline deve ter no máximo 7 palavras; apoio no máximo 12; kicker no máximo 4.
 A direção de cena deve ser visual, cinematográfica, clara no celular e SEM texto dentro da imagem de fundo.
 Retorne SOMENTE JSON:
@@ -517,6 +522,8 @@ Use no máximo 5 hashtags relevantes. Não mencione pesquisa, algoritmo ou conco
 Não transforme toda legenda em anúncio; preço e venda direta são secundários nesta fase.
 Não invente preço, desempenho, catálogo, teste grátis ou garantia.
 Finalize com CTA natural para seguir o perfil e, quando fizer sentido, salvar ou compartilhar.
+Se houver pergunta de escolha, escreva as opções por nome na legenda; nunca use números soltos sem correspondência explícita.
+Não repita a mesma chamada/CTA em parágrafos diferentes. Uma legenda deve ter uma ideia e uma ação principal.
 Retorne SOMENTE JSON válido: {"caption":"...","reason":"..."}.""",
             "LEGENDA BASE:\n" + base_caption[:4000]
             + "\n\nTENDÊNCIAS:\n" + json.dumps(research, ensure_ascii=False)[:7000]
@@ -543,6 +550,7 @@ def audit_visual_quality(image_path, headline, support, kicker=""):
             """Você é o controle de qualidade visual da Ragnar One.
 Textos permitidos: RAGNAR ONE; o kicker fornecido; a headline fornecida; a linha de apoio fornecida;
 COMENTE QUERO E SAIBA MAIS; @ragnarplay1.
+Reprove também se houver enquete ambígua, pedido de 1/2/3 sem significado visível, opções ausentes, CTA que dependa de adivinhação ou TV/tela vazia dominando a composição sem comunicar o tema.
 Reprove se houver outro texto inesperado, inglês visível, texto ilegível/aleatório, composição amadora,
 headline pequena demais, excesso de informação, anatomia muito estranha ou aparência de card genérico.
 Aprove apenas se parecer anúncio premium e legível no celular.
