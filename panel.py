@@ -1921,9 +1921,6 @@ def _schedule_times():
     Escolhe exatamente 3 horários por dia. A agenda adaptativa é calculada
     com o desempenho histórico da própria conta e congelada durante o dia.
 
-    Em 24/09/2026 existe uma janela de recuperação deliberada: 09:00, 12:00 e
-    16:00 no horário de São Paulo. Este override fica aqui no scheduler real,
-    sem depender de sitecustomize ou variável de ambiente.
     """
     def parse_times(values):
         parsed = []
